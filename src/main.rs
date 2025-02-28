@@ -9,6 +9,8 @@ mod messages_events;
 mod setup_mongodb;
 mod maintenance;
 mod messages_ticker;
+mod data_mongodb;
+mod transactions_struct;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;

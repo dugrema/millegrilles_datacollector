@@ -1,7 +1,6 @@
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::BackupStarter;
 use millegrilles_common_rust::certificats::ValidateurX509;
-use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::domaines_traits::{AiguillageTransactions, ConsommateurMessagesBus, GestionnaireBusMillegrilles, GestionnaireDomaineV2};
 use millegrilles_common_rust::domaines_v2::GestionnaireDomaineSimple;
