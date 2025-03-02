@@ -1,9 +1,11 @@
 // Data struct used for transaction content
 
 use millegrilles_common_rust::chrono::{DateTime, Utc};
+use millegrilles_common_rust::constantes::Securite;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::DechiffrageInterMillegrilleOwned;
 use serde::{Deserialize, Serialize};
+use crate::data_mongodb::DataFeedRow;
 
 #[derive(Serialize, Deserialize)]
 struct AddFileItem {
@@ -69,28 +71,32 @@ struct FeedInformation {
 }
 
 #[derive(Serialize, Deserialize)]
-struct AddFeed {
+pub struct CreateFeedTransaction {
     /// Type of feed (implies data type). Used by processors, aggregators, displays.
-    feed_type: String,
+    pub feed_type: String,
+    /// Security level of the feed
+    pub security_level: String,
     /// Domain that owns the data for this feed
-    domain: String,
+    pub domain: String,
     /// Refresh rate in seconds when polling. No effect on live/push feeds.
     #[serde(skip_serializing_if = "Option::is_none")]
-    poll_rate: Option<usize>,
+    pub poll_rate: Option<usize>,
     /// If false, the feed is not activated on creation to produce data
     #[serde(skip_serializing_if = "Option::is_none")]
-    active: Option<bool>,
+    pub active: Option<bool>,
     /// If true, the data will be decrypted in a decrypted_feed_information field in the database.
     #[serde(skip_serializing_if = "Option::is_none")]
-    decrypt_in_database: Option<bool>,
+    pub decrypt_in_database: Option<bool>,
     /// Private information on the feed, including name/description, url, auth, etc.
-    encrypted_feed_information: EncryptedDocument,
+    pub encrypted_feed_information: EncryptedDocument,
 }
 
 #[derive(Serialize, Deserialize)]
 struct UpdateFeed {
     /// Id of the feed to update.
     feed_id: String,
+    /// Security level of the feed
+    security_level: Option<String>,
     /// Refresh rate in seconds when polling. No effect on live/push feeds.
     #[serde(skip_serializing_if = "Option::is_none")]
     poll_rate: Option<usize>,

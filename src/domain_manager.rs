@@ -90,11 +90,13 @@ impl ConsommateurMessagesBus for DataCollectorDomainManager {
 
 #[async_trait]
 impl AiguillageTransactions for DataCollectorDomainManager {
-    async fn aiguillage_transaction<M>(&self, middleware: &M, transaction: TransactionValide, session: &mut ClientSession) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    async fn aiguillage_transaction<M>(&self, middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao
     {
-        consume_transaction(self, middleware, transaction, session).await
+        consume_transaction(self, middleware, transaction, session).await?;
+        Ok(None)
     }
 }
 

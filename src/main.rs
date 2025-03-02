@@ -11,6 +11,7 @@ mod maintenance;
 mod messages_ticker;
 mod data_mongodb;
 mod transactions_struct;
+mod keymaster;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;

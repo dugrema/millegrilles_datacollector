@@ -18,7 +18,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
     }
 
     let commandes_privees: Vec<&str> = vec![
-        // COMMAND_CHAT_CONVERSATION_DELETE,
+        TRANSACTION_CREATE_FEED,
     ];
     for cmd in commandes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L2Prive});
