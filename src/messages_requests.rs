@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 
-use millegrilles_common_rust::bson::doc;
+use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::common_messages::ResponseRequestDechiffrageV2Cle;
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
@@ -16,12 +16,12 @@ use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 
 use crate::constants::*;
-use crate::data_mongodb::DataFeedRow;
+use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow};
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::keymaster::{get_decrypted_keys, get_encrypted_keys};
 use crate::transactions_struct::CreateFeedTransaction;
 
-pub async fn consume_request<M>(middleware: &M, message: MessageValide, manager: &DataCollectorDomainManager)
+pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -51,7 +51,9 @@ pub async fn consume_request<M>(middleware: &M, message: MessageValide, manager:
 
     match action.as_str() {
         // Commandes standard
-        REQUEST_GET_FEEDS => request_get_feeds(middleware, message, manager).await,
+        REQUEST_GET_FEEDS => request_get_feeds(middleware, message).await,
+        REQUEST_GET_FEEDS_FOR_SCRAPER => request_get_feeds_for_scraper(middleware, message).await,
+        REQUEST_CHECK_EXISTING_DATA_IDS => request_check_existing_data_ids(middleware, message).await,
         // Unknown request
         _ => Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown request"))?))
     }
@@ -104,7 +106,7 @@ struct RequestGetFeedsResponse {
     keys: MessageMilleGrillesOwned,
 }
 
-async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide, manager: &DataCollectorDomainManager)
+async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao + ValidateurX509
 {
@@ -141,9 +143,59 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide, manage
         filtre
     };
 
+    let response_message = get_feeds(middleware, &mut message, filtre).await?;
+
+    // let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    // let mut cursor = collection.find(filtre, None).await?;
+    //
+    // let mut key_ids = HashSet::new();
+    // let mut feeds: Vec<FeedResponse> = Vec::new();
+    //
+    // while cursor.advance().await? {
+    //     let row = match cursor.deserialize_current() {
+    //         Ok(row) => row,
+    //         Err(e) => {
+    //             warn!("request_get_feeds Deserialization error in collection Feeds: {:?}", e);
+    //             continue
+    //         }
+    //     };
+    //     if let Some(cle_id) = row.encrypted_feed_information.cle_id.clone() {
+    //         key_ids.insert(cle_id);
+    //     }
+    //     feeds.push(row.into());
+    // }
+    //
+    // // Recover all decryption keys, re-encrypt them for the client
+    // let key_ids = key_ids.into_iter().collect::<Vec<String>>();
+    // let client_certificate = message.certificat.chaine_pem()?;
+    // let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
+    //
+    // let response_message = RequestGetFeedsResponse {ok: true, feeds, keys: recrypted_keys};
+
+    Ok(Some(middleware.build_reponse(response_message)?.0))
+}
+
+async fn request_get_feeds_for_scraper<M>(middleware: &M, mut message: MessageValide)
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if ! message.certificat.verifier_roles_string(vec!["web_scraper".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
+    } else if ! message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
+    }
+
+    let filtre = doc! {"deleted": false};
+    let response_message = get_feeds(middleware, &mut message, filtre).await?;
+
+    Ok(Some(middleware.build_reponse(response_message)?.0))
+}
+
+async fn get_feeds<M>(middleware: &M, message: &mut MessageValide, filtre: Document) -> Result<RequestGetFeedsResponse, CommonError>
+    where M: GenerateurMessages + MongoDao
+{
     let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
     let mut cursor = collection.find(filtre, None).await?;
-
     let mut key_ids = HashSet::new();
     let mut feeds: Vec<FeedResponse> = Vec::new();
 
@@ -166,7 +218,54 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide, manage
     let client_certificate = message.certificat.chaine_pem()?;
     let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
 
-    let response_message = RequestGetFeedsResponse {ok: true, feeds, keys: recrypted_keys};
+    let response_message = RequestGetFeedsResponse { ok: true, feeds, keys: recrypted_keys };
+    Ok(response_message)
+}
+
+#[derive(Deserialize)]
+struct CheckExistingDataIdsRequest {
+    feed_id: String,
+    data_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CheckExistingDataIdsResponse {
+    existing_ids: Vec<String>,
+    missing_ids: Vec<String>,
+}
+
+async fn request_check_existing_data_ids<M>(middleware: &M, mut message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if ! message.certificat.verifier_roles_string(vec!["web_scraper".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
+    } else if ! message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
+    }
+
+    let message_ref = message.message.parse()?;
+    let request: CheckExistingDataIdsRequest = message_ref.contenu()?.deserialize()?;
+
+    let filtre = doc! {"feed_id": &request.feed_id, "data_id": {"$in": &request.data_ids}};
+    let collection = middleware.get_collection_typed::<DataCollectorRowIds>(COLLECTION_NAME_DATA_DATACOLLECTOR)?;
+    let mut cursor = collection.find(filtre, None).await?;
+
+    let mut present_ids = Vec::with_capacity(request.data_ids.len());
+    let mut missing_ids = HashSet::with_capacity(request.data_ids.len());
+    missing_ids.extend(request.data_ids);
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        let data_id = row.data_id.to_string();
+        if missing_ids.remove(&data_id) {
+            present_ids.push(data_id);
+        }
+    }
+
+    let response_message = CheckExistingDataIdsResponse {
+        existing_ids: present_ids,
+        missing_ids: missing_ids.into_iter().collect(),
+    };
 
     Ok(Some(middleware.build_reponse(response_message)?.0))
 }

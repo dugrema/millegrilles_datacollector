@@ -14,9 +14,9 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::serde_json;
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::constants::*;
-use crate::data_mongodb::DataFeedRow;
+use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow};
 use crate::keymaster::transmit_attached_key;
-use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, UpdateFeedTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, SaveDataItemTransaction, UpdateFeedTransaction};
 
 pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
@@ -58,6 +58,7 @@ pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager:
         TRANSACTION_CREATE_FEED => command_create_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_UPDATE_FEED => command_update_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_DELETE_FEED => command_delete_feed(middleware, message, manager, &mut session).await,
+        TRANSACTION_SAVE_DATA_ITEM => command_save_data_item(middleware, message, manager, &mut session).await,
         // Unknown command
         _ => {
             Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown command"))?))
@@ -220,6 +221,54 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 
     // Save and run new transaction
     sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+async fn command_save_data_item<M>(middleware: &M, mut message: MessageValide, manager: &DataCollectorDomainManager, session: &mut ClientSession)
+                                   -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if ! message.certificat.verifier_roles_string(vec!["web_scraper".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
+    } else if ! message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
+    }
+
+    let mut message_owned = message.message.parse_to_owned()?;
+    let transaction: SaveDataItemTransaction = message_owned.deserialize()?;
+
+    // Check if the data item already exists
+    let collection = middleware.get_collection_typed::<DataCollectorRowIds>(COLLECTION_NAME_DATA_DATACOLLECTOR)?;
+    let filtre = doc!{"feed_id": &transaction.feed_id, "data_id": &transaction.data_id};
+    let mut cursor = collection.find(filtre, None).await?;
+    if cursor.advance().await? {
+        return Ok(Some(middleware.reponse_err(Some(409), None, Some("Data item already exists"))?));
+    }
+
+    let key_command = match message_owned.attachements {
+        Some(mut inner) => inner.remove("key"),
+        None => None
+    };
+
+    if let Some(key) = key_command {
+        match transmit_attached_key(middleware, key).await {
+            Ok(Some(error)) => {
+                error!("command_save_data_item Invalid key content - command rejected");
+                return Ok(Some(error));
+            },
+            Err(e) => {
+                error!("command_save_data_item Error {:?} - command rejected", e);
+                return Ok(Some(middleware.reponse_err(Some(1), None, Some(format!("Error: {:?}", e).as_str()))?));
+            },
+            Ok(None) => ()  // Key saved successfully
+        }
+    };
+
+    if let Err(e) = sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await {
+        error!("command_save_data_item Error processing transaction - command rejected : {:?}", e);
+        return Ok(Some(middleware.reponse_err(Some(500), None, Some(format!("Error: {:?}", e).as_str()))?));
+    }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }

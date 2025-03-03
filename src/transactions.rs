@@ -2,7 +2,7 @@ use log::debug;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
-use millegrilles_common_rust::constantes::DELEGATION_GLOBALE_PROPRIETAIRE;
+use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
@@ -11,9 +11,9 @@ use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::serde_json;
 
 use crate::constants::*;
-use crate::data_mongodb::DataFeedRow;
+use crate::data_mongodb::{DataCollectorRow, DataCollectorRowIds, DataFeedRow};
 use crate::domain_manager::DataCollectorDomainManager;
-use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, UpdateFeedTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, SaveDataItemTransaction, UpdateFeedTransaction};
 
 pub async fn consume_transaction<M, T>(_gestionnaire: &DataCollectorDomainManager, middleware: &M, transaction: T, session: &mut ClientSession)
     -> Result<(), CommonError>
@@ -38,6 +38,7 @@ where
         TRANSACTION_CREATE_FEED => transaction_create_feed(middleware, transaction, session).await,
         TRANSACTION_UPDATE_FEED => transaction_update_feed(middleware, transaction, session).await,
         TRANSACTION_DELETE_FEED => transaction_delete_feed(middleware, transaction, session).await,
+        TRANSACTION_SAVE_DATA_ITEM => transaction_save_data_item(middleware, transaction, session).await,
         _ => Err(format!("core_backup.aiguillage_transaction: Transaction {} est de type non gere : {}", transaction.transaction.id, action))?
     }
 }
@@ -156,6 +157,25 @@ where M: GenerateurMessages + MongoDao
     let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
     // collection.delete_one_with_session(filtre, None, session).await?;
     collection.update_one_with_session(filtre, ops, None, session).await?;
+
+    Ok(())
+}
+
+async fn transaction_save_data_item<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
+    -> Result<(), CommonError>
+    where M: GenerateurMessages + MongoDao
+{
+    if ! transaction.certificat.verifier_roles_string(vec!["web_scraper".to_string()])? {
+        Err("transaction_save_data_itemasync Invalid role")?;
+    } else if ! transaction.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        Err("transaction_save_data_itemasync Invalid security")?;
+    }
+
+    let transaction_save_data_item: SaveDataItemTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+    let data_item: DataCollectorRow = transaction_save_data_item.into();
+
+    let collection = middleware.get_collection_typed::<DataCollectorRow>(COLLECTION_NAME_DATA_DATACOLLECTOR)?;
+    collection.insert_one_with_session(data_item, None, session).await?;
 
     Ok(())
 }

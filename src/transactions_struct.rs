@@ -1,14 +1,14 @@
-// Data struct used for transaction content
+use serde::{Deserialize, Serialize};
 
+use millegrilles_common_rust::bson;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
-use millegrilles_common_rust::constantes::Securite;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::DechiffrageInterMillegrilleOwned;
-use serde::{Deserialize, Serialize};
-use crate::data_mongodb::DataFeedRow;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::epochseconds;
+use crate::data_mongodb::DataCollectorRow;
 
 #[derive(Serialize, Deserialize)]
-struct AddFileItem {
+pub struct FileItem {
     /// File unique identifier on filehosts
     fuuid: String,
     /// File decryption information
@@ -17,18 +17,31 @@ struct AddFileItem {
 }
 
 #[derive(Serialize, Deserialize)]
-struct AddDataItem {
+pub struct SaveDataItemTransaction {
     /// Unique data item identifier for this feed
-    id: String,
+    pub data_id: String,
     /// Source of the data item
-    feed_id: String,
+    pub feed_id: String,
     /// Item publication or content date
-    pub_date: DateTime<Utc>,
+    #[serde(with="epochseconds")]
+    pub pub_date: DateTime<Utc>,
     /// Encrypted content of the data item. Structure depends on the feed type.
-    encrypted_content: EncryptedDocument,
+    pub encrypted_data: EncryptedDocument,
     /// Files associated with this data item
     #[serde(skip_serializing_if = "Option::is_none")]
-    files: Option<Vec<AddFileItem>>,
+    pub files: Option<Vec<FileItem>>,
+}
+
+impl Into<DataCollectorRow> for SaveDataItemTransaction {
+    fn into(self) -> DataCollectorRow {
+        DataCollectorRow {
+            data_id: self.data_id,
+            feed_id: self.feed_id,
+            pub_date: self.pub_date,
+            encrypted_data: self.encrypted_data,
+            files: self.files,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -45,7 +58,7 @@ struct UpdateDataItem {
     encrypted_content: Option<EncryptedDocument>,
     /// Add new files associated with this data item
     #[serde(skip_serializing_if = "Option::is_none")]
-    add_files: Option<Vec<AddFileItem>>,
+    add_files: Option<Vec<FileItem>>,
     /// Fuuids of files to remove from this data item
     #[serde(skip_serializing_if = "Option::is_none")]
     remove_files: Option<Vec<String>>,

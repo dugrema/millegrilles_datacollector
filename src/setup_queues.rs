@@ -8,12 +8,29 @@ use crate::domain_manager::DataCollectorDomainManager;
 pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
+    // RK 1.public
+    let requetes_privees: Vec<&str> = vec![
+        REQUEST_GET_FEEDS_FOR_SCRAPER,
+        REQUEST_CHECK_EXISTING_DATA_IDS,
+    ];
+    for req in requetes_privees {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L1Public});
+    }
+
     // RK 2.prive
     let requetes_privees: Vec<&str> = vec![
         REQUEST_GET_FEEDS,
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L2Prive});
+    }
+
+
+    let commands_public: Vec<&str> = vec![
+        TRANSACTION_SAVE_DATA_ITEM,
+    ];
+    for cmd in commands_public {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L1Public});
     }
 
     let commandes_privees: Vec<&str> = vec![

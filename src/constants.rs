@@ -2,10 +2,14 @@ pub const DOMAIN_NAME: &str = "DataCollector";
 
 pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const COLLECTION_NAME_FEEDS: &str = "DataCollector/feeds";
+pub const COLLECTION_NAME_DATA_DATACOLLECTOR: &str = "DataCollector/data/DataCollector";
 
 pub const REQUEST_GET_FEEDS: &str = "getFeeds";
+pub const REQUEST_GET_FEEDS_FOR_SCRAPER: &str = "getFeedsForScraper";
+pub const REQUEST_CHECK_EXISTING_DATA_IDS: &str = "checkExistingDataIds";
 
 
 pub const TRANSACTION_CREATE_FEED: &str = "createFeed";
 pub const TRANSACTION_UPDATE_FEED: &str = "updateFeed";
 pub const TRANSACTION_DELETE_FEED: &str = "deleteFeed";
+pub const TRANSACTION_SAVE_DATA_ITEM: &str = "saveDataItem";

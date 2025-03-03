@@ -4,6 +4,7 @@ use millegrilles_common_rust::bson;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
+use crate::transactions_struct::FileItem;
 
 #[derive(Serialize, Deserialize)]
 pub struct DataFeedRow {
@@ -37,4 +38,21 @@ pub struct DataFeedRow {
     pub deleted: bool,
     #[serde(default, with="opt_chrono_datetime_as_bson_datetime", skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DataCollectorRowIds<'a> {
+    pub data_id: &'a str,
+    pub feed_id: &'a str,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DataCollectorRow {
+    pub data_id: String,
+    pub feed_id: String,
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub pub_date: DateTime<Utc>,
+    pub encrypted_data: EncryptedDocument,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<FileItem>>,
 }
