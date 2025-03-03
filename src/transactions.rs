@@ -148,8 +148,14 @@ where M: GenerateurMessages + MongoDao
         false => doc!{"feed_id": &transaction_delete_feed.feed_id, "user_id": &user_id},
     };
 
+    let ops = doc! {
+        "$set": {"deleted": true},
+        "$currentDate": {"deleted_at": true}
+    };
+
     let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
-    collection.delete_one_with_session(filtre, None, session).await?;
+    // collection.delete_one_with_session(filtre, None, session).await?;
+    collection.update_one_with_session(filtre, ops, None, session).await?;
 
     Ok(())
 }
