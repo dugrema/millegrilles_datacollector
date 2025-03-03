@@ -1,5 +1,9 @@
-use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use serde::{Deserialize, Serialize};
+
+use millegrilles_common_rust::bson;
+use millegrilles_common_rust::chrono::{DateTime, Utc};
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
+use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 
 #[derive(Serialize, Deserialize)]
 pub struct DataFeedRow {
@@ -21,4 +25,16 @@ pub struct DataFeedRow {
     pub decrypt_in_database: Option<bool>,
     /// Private information on the feed, including name/description, url, auth, etc.
     pub encrypted_feed_information: EncryptedDocument,
+    /// Owner of the feed or None for system feeds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub created_at: DateTime<Utc>,
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub modified_at: DateTime<Utc>,
+    /// True if feed is logically deleted but can be recovered
+    pub deleted: bool,
+    #[serde(default, with="opt_chrono_datetime_as_bson_datetime", skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<DateTime<Utc>>,
 }

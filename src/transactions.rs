@@ -1,5 +1,7 @@
 use log::debug;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::constantes::DELEGATION_GLOBALE_PROPRIETAIRE;
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
@@ -42,6 +44,7 @@ async fn transaction_create_feed<M>(middleware: &M, transaction: TransactionVali
     where M: GenerateurMessages + MongoDao
 {
     let transaction_id = transaction.transaction.id.clone();
+    let estampille = transaction.transaction.estampille;
     let transaction_create_feed: CreateFeedTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
 
     let user_id = match transaction.certificat.get_user_id() {
@@ -52,6 +55,15 @@ async fn transaction_create_feed<M>(middleware: &M, transaction: TransactionVali
         Err(e) => Err(format!("grosfichiers.transaction_nouvelle_version Erreur get_user_id() : {:?}", e))?
     };
 
+    let is_admin = transaction.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+
+    let feed_user_id = match is_admin {
+        true => None,                   // System feed
+        false => Some(user_id.clone())  // User feed
+    };
+
+    let now = Utc::now();
+
     let data_row = DataFeedRow {
         feed_id: transaction_id,
         feed_type: transaction_create_feed.feed_type,
@@ -61,6 +73,11 @@ async fn transaction_create_feed<M>(middleware: &M, transaction: TransactionVali
         active: transaction_create_feed.active,
         decrypt_in_database: transaction_create_feed.decrypt_in_database,
         encrypted_feed_information: transaction_create_feed.encrypted_feed_information,
+        user_id: feed_user_id,
+        created_at: estampille,
+        modified_at: now,
+        deleted: false,
+        deleted_at: None,
     };
 
     let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;

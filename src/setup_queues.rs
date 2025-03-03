@@ -11,7 +11,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
 
     // RK 2.prive
     let requetes_privees: Vec<&str> = vec![
-        // REQUEST_GET_CONVERSATION_KEYS,
+        REQUEST_GET_FEEDS,
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L2Prive});
