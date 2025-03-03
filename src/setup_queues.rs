@@ -18,6 +18,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
 
     let commandes_privees: Vec<&str> = vec![
         TRANSACTION_CREATE_FEED,
+        TRANSACTION_UPDATE_FEED,
         TRANSACTION_DELETE_FEED,
     ];
     for cmd in commandes_privees {

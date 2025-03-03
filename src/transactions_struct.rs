@@ -92,23 +92,23 @@ pub struct CreateFeedTransaction {
 }
 
 #[derive(Serialize, Deserialize)]
-struct UpdateFeed {
+pub struct UpdateFeedTransaction {
     /// Id of the feed to update.
-    feed_id: String,
+    pub feed_id: String,
     /// Security level of the feed
-    security_level: Option<String>,
+    pub security_level: Option<String>,
     /// Refresh rate in seconds when polling. No effect on live/push feeds.
     #[serde(skip_serializing_if = "Option::is_none")]
-    poll_rate: Option<usize>,
+    pub poll_rate: Option<usize>,
     /// If false, the feed will not be producing data
     #[serde(skip_serializing_if = "Option::is_none")]
-    active: Option<bool>,
+    pub active: Option<bool>,
     /// If true, the data will be decrypted in a decrypted_feed_information field in the database.
     #[serde(skip_serializing_if = "Option::is_none")]
-    decrypt_in_database: Option<bool>,
+    pub decrypt_in_database: Option<bool>,
     /// Private information on the feed, including name/description, url, auth, etc.
     #[serde(skip_serializing_if = "Option::is_none")]
-    encrypted_feed_information: Option<EncryptedDocument>,
+    pub encrypted_feed_information: Option<EncryptedDocument>,
 }
 
 #[derive(Serialize, Deserialize)]

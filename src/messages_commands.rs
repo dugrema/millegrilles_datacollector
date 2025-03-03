@@ -16,7 +16,7 @@ use crate::domain_manager::DataCollectorDomainManager;
 use crate::constants::*;
 use crate::data_mongodb::DataFeedRow;
 use crate::keymaster::transmit_attached_key;
-use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, UpdateFeedTransaction};
 
 pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
@@ -56,6 +56,7 @@ pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager:
     let result = match action.as_str() {
         // Commandes standard
         TRANSACTION_CREATE_FEED => command_create_feed(middleware, message, manager, &mut session).await,
+        TRANSACTION_UPDATE_FEED => command_update_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_DELETE_FEED => command_delete_feed(middleware, message, manager, &mut session).await,
         // Unknown command
         _ => {
@@ -129,6 +130,53 @@ async fn command_create_feed<M>(middleware: &M, mut message: MessageValide, mana
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
+async fn command_update_feed<M>(middleware: &M, mut message: MessageValide, manager: &DataCollectorDomainManager, session: &mut ClientSession)
+                                -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    let mut message_owned = message.message.parse_to_owned()?;
+
+    let user_id = match message.certificat.get_user_id() {
+        Ok(inner) => match inner {
+            Some(user) => user.to_owned(),
+            None => {
+                error!("command_update_feed Invalid certificate, no user_id - command rejected");
+                return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
+            }
+        },
+        Err(e) => Err(format!("command_update_feed Error getting user id: {:?}", e))?
+    };
+    let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+
+    // Deserialize to validate the format
+    let command: UpdateFeedTransaction = message_owned.deserialize()?;
+
+    // Check if the user is allowed to delete the feed
+    let filtre = doc!{"feed_id": &command.feed_id};
+    let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    let feed = match collection.find_one(filtre, None).await? {
+        Some(feed) => feed,
+        None => {
+            error!("command_update_feed Unknown feed_id {} - command rejected", command.feed_id);
+            return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
+        }
+    };
+
+    if feed.user_id == Some(user_id) {
+        // Ok, feed belongs to user
+    } else if is_admin && feed.user_id.is_none() {
+        // Ok, system feed managed by admin
+    }  else {
+        error!("command_update_feed Deleteing feed_id {} - user not authorized", command.feed_id);
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Unauthorized"))?));
+    }
+
+    // Save and run new transaction
+    sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
 async fn command_delete_feed<M>(middleware: &M, mut message: MessageValide, manager: &DataCollectorDomainManager, session: &mut ClientSession)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: GenerateurMessages + MongoDao + ValidateurX509
@@ -139,11 +187,11 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         Ok(inner) => match inner {
             Some(user) => user.to_owned(),
             None => {
-                error!("command_create_feed Invalid certificate, no user_id - command rejected");
+                error!("command_delete_feed Invalid certificate, no user_id - command rejected");
                 return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
             }
         },
-        Err(e) => Err(format!("command_create_feed Erreur get_user_id() : {:?}", e))?
+        Err(e) => Err(format!("command_delete_feed Erreur get_user_id() : {:?}", e))?
     };
     let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
 
@@ -156,7 +204,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     let feed = match collection.find_one(filtre, None).await? {
         Some(feed) => feed,
         None => {
-            error!("command_create_feed Unknown feed_id {} - command rejected", command.feed_id);
+            error!("command_delete_feed Unknown feed_id {} - command rejected", command.feed_id);
             return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
         }
     };
@@ -166,7 +214,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     } else if is_admin && feed.user_id.is_none() {
         // Ok, system feed managed by admin
     }  else {
-        error!("command_create_feed Deleteing feed_id {} - user not authorized", command.feed_id);
+        error!("command_delete_feed Deleteing feed_id {} - user not authorized", command.feed_id);
         return Ok(Some(middleware.reponse_err(Some(401), None, Some("Unauthorized"))?));
     }
 

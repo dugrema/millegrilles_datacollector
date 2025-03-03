@@ -7,4 +7,5 @@ pub const REQUEST_GET_FEEDS: &str = "getFeeds";
 
 
 pub const TRANSACTION_CREATE_FEED: &str = "createFeed";
+pub const TRANSACTION_UPDATE_FEED: &str = "updateFeed";
 pub const TRANSACTION_DELETE_FEED: &str = "deleteFeed";

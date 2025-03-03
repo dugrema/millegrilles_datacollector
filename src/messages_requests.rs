@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use log::{debug, error, warn};
+use serde::{Deserialize, Serialize};
+
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::common_messages::ResponseRequestDechiffrageV2Cle;
@@ -12,7 +14,7 @@ use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
-use serde::{Deserialize, Serialize};
+
 use crate::constants::*;
 use crate::data_mongodb::DataFeedRow;
 use crate::domain_manager::DataCollectorDomainManager;
@@ -47,14 +49,11 @@ pub async fn consume_request<M>(middleware: &M, message: MessageValide, manager:
         _ => Err(CommonError::Str("requests Bad message type, must be request"))?
     };
 
-    let mut session = middleware.get_session().await?;
-
     match action.as_str() {
         // Commandes standard
         REQUEST_GET_FEEDS => request_get_feeds(middleware, message, manager).await,
         // Unknown request
-        _ => Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown command"))?))
-        // _ => Ok(Some(middleware.reponse_err(Some(404), None, Some("Unsupported action"))?)),
+        _ => Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown request"))?))
     }
 }
 
@@ -93,6 +92,11 @@ impl From<DataFeedRow> for FeedResponse {
     }
 }
 
+#[derive(Deserialize)]
+struct RequestGetFeeds {
+    feed_ids: Option<Vec<String>>,
+}
+
 #[derive(Serialize)]
 struct RequestGetFeedsResponse {
     ok: bool,
@@ -104,8 +108,6 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide, manage
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao + ValidateurX509
 {
-    // let mut message_owned = message.message.parse_to_owned()?;
-
     let user_id = match message.certificat.get_user_id() {
         Ok(inner) => match inner {
             Some(user) => user.to_owned(),
@@ -119,13 +121,24 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide, manage
 
     let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
 
-    // let request: XRequestTypeX = message_owned.deserialize()?;
+    let filtre = {
+        let mut filtre = if is_admin {
+            doc! {"user_id": null, "deleted": false}  // Only fetch system feeds
+        } else {
+            // Regular private user, only load user feeds.
+            doc!("user_id": &user_id, "deleted": false)
+        };
 
-    let filtre = if is_admin {
-        doc!{"user_id": null, "deleted": false}  // Only fetch system feeds
-    } else {
-        // Regular private user, only load user feeds.
-        doc!("user_id": &user_id, "deleted": false)
+        let request: RequestGetFeeds = {
+            let message_ref = message.message.parse()?;
+            message_ref.contenu()?.deserialize()?
+        };
+
+        if let Some(feed_ids) = request.feed_ids {
+            filtre.insert("feed_id", doc!{"$in": feed_ids});
+        }
+
+        filtre
     };
 
     let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
