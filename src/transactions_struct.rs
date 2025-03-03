@@ -112,14 +112,14 @@ struct UpdateFeed {
 }
 
 #[derive(Serialize, Deserialize)]
-struct DeleteFeed {
-    feed_id: String,
+pub struct DeleteFeedTransaction {
+    pub feed_id: String,
     /// If true, deletes the feed permanently and purges the database.
     #[serde(skip_serializing_if = "Option::is_none")]
-    purge: Option<bool>,
+    pub purge: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct RestoreFeed {
-    feed_id: String,
+pub struct RestoreFeedTransaction {
+    pub feed_id: String,
 }

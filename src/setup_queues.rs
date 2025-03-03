@@ -7,7 +7,6 @@ use crate::domain_manager::DataCollectorDomainManager;
 
 pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
-    //let mut rk_sauvegarder_cle = Vec::new();
 
     // RK 2.prive
     let requetes_privees: Vec<&str> = vec![
@@ -19,16 +18,10 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
 
     let commandes_privees: Vec<&str> = vec![
         TRANSACTION_CREATE_FEED,
+        TRANSACTION_DELETE_FEED,
     ];
     for cmd in commandes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L2Prive});
-    }
-
-    let commandes_protegees: Vec<&str> = vec![
-        // COMMAND_CHAT_EXCHANGE,
-    ];
-    for cmd in commandes_protegees {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L3Protege});
     }
 
     let mut queues = Vec::new();

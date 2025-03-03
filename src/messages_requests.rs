@@ -52,8 +52,9 @@ pub async fn consume_request<M>(middleware: &M, message: MessageValide, manager:
     match action.as_str() {
         // Commandes standard
         REQUEST_GET_FEEDS => request_get_feeds(middleware, message, manager).await,
-        // Unknown command
-        _ => Ok(Some(middleware.reponse_err(Some(404), None, Some("Unsupported action"))?)),
+        // Unknown request
+        _ => Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown command"))?))
+        // _ => Ok(Some(middleware.reponse_err(Some(404), None, Some("Unsupported action"))?)),
     }
 }
 
@@ -121,10 +122,10 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide, manage
     // let request: XRequestTypeX = message_owned.deserialize()?;
 
     let filtre = if is_admin {
-        doc!{"user_id": null}  // Only fetch system feeds
+        doc!{"user_id": null, "deleted": false}  // Only fetch system feeds
     } else {
         // Regular private user, only load user feeds.
-        doc!("user_id": &user_id)
+        doc!("user_id": &user_id, "deleted": false)
     };
 
     let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
