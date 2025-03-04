@@ -10,7 +10,7 @@ use crate::data_mongodb::DataCollectorRow;
 #[derive(Serialize, Deserialize)]
 pub struct FileItem {
     /// File unique identifier on filehosts
-    fuuid: String,
+    pub fuuid: String,
     /// File decryption information
     #[serde(skip_serializing_if = "Option::is_none")]
     decryption: Option<DechiffrageInterMillegrilleOwned>,

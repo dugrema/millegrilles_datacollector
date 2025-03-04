@@ -15,6 +15,7 @@ use millegrilles_common_rust::serde_json;
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::constants::*;
 use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow};
+use crate::file_maintenance::{claim_and_visit_files, claim_files};
 use crate::keymaster::transmit_attached_key;
 use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, SaveDataItemTransaction, UpdateFeedTransaction};
 
@@ -238,6 +239,17 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     let mut message_owned = message.message.parse_to_owned()?;
     let transaction: SaveDataItemTransaction = message_owned.deserialize()?;
 
+    let fuuids = match transaction.files.as_ref() {
+        Some(files) => {
+            let mut fuuids = Vec::with_capacity(files.len());
+            for file in files {
+                fuuids.push(file.fuuid.clone());
+            }
+            Some(fuuids)
+        }
+        None => None
+    };
+
     // Check if the data item already exists
     let collection = middleware.get_collection_typed::<DataCollectorRowIds>(COLLECTION_NAME_DATA_DATACOLLECTOR)?;
     let filtre = doc!{"feed_id": &transaction.feed_id, "data_id": &transaction.data_id};
@@ -268,6 +280,12 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     if let Err(e) = sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await {
         error!("command_save_data_item Error processing transaction - command rejected : {:?}", e);
         return Ok(Some(middleware.reponse_err(Some(500), None, Some(format!("Error: {:?}", e).as_str()))?));
+    }
+
+    if let Some(fuuids) = fuuids {
+        // Emit file claims
+        debug!("command_save_data_item Claiming fuuids {:?}", fuuids);
+        claim_and_visit_files(middleware, fuuids).await?;
     }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
