@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+use log::debug;
+use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::constantes::{Securite, DOMAINE_TOPOLOGIE};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
+use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use serde::{Deserialize, Serialize};
+use crate::constants::COLLECTION_NAME_DATA_DATACOLLECTOR;
 
 #[derive(Serialize)]
 struct RequeteFuuidsVisites<'a> {
@@ -66,4 +70,54 @@ where M: GenerateurMessages, S: AsRef<str>, I: IntoIterator<Item=S>
     } else {
         Err("claim_files Bad response type for claimFiles")?
     }
+}
+
+#[derive(Deserialize)]
+struct FuuidRow {
+    fuuid: String,
+}
+
+pub async fn claim_all_files<M>(middleware: &M)
+    -> Result<(), CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    debug!("claim_all_files Start");
+    let collection = middleware.get_collection(COLLECTION_NAME_DATA_DATACOLLECTOR)?;
+
+    // Extract all fuuids into single rows
+    let pipeline = vec![
+        doc!{"$match": {"files.0": {"$exists": true}}},
+        doc!{"$project": {"files": 1}},
+        doc!{"$unwind": {"path": "$files"}},
+        // doc!{"$out": "DataCollector/test"},
+        doc!{"$addFields": {"fuuid": "$files.fuuid"}},
+        doc!{"$project": {"fuuid": 1}},
+    ];
+
+    let mut fuuids_batch = Vec::with_capacity(100);
+    let mut batch_no = 0;
+
+    let mut cursor = collection.aggregate(pipeline, None).await?;
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        let row: FuuidRow = convertir_bson_deserializable(row)?;
+        fuuids_batch.push(row.fuuid);
+
+        if fuuids_batch.len() >= 100 {
+            // Run batch
+            debug!("Claims {} files", fuuids_batch.len());
+            claim_files(middleware, Some(batch_no), Some(false), &fuuids_batch).await?;
+            fuuids_batch.clear();
+            batch_no += 1;
+        }
+    }
+
+    if ! fuuids_batch.is_empty() {
+        debug!("Claims {} files (final batch)", fuuids_batch.len());
+        claim_files(middleware, Some(batch_no), Some(true), fuuids_batch).await?;
+    }
+
+    debug!("claim_all_files Done");
+
+    Ok(())
 }
