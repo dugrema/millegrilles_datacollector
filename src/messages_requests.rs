@@ -14,7 +14,7 @@ use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::mongodb::ClientSession;
-use millegrilles_common_rust::mongodb::options::FindOptions;
+use millegrilles_common_rust::mongodb::options::{CountOptions, FindOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::epochseconds;
 
@@ -289,6 +289,7 @@ struct RequestGetDataItemsMostRecentResponse {
     ok: bool,
     items: Vec<DataCollectorItemResponse>,
     keys: MessageMilleGrillesOwned,
+    estimated_count: Option<i64>,
 }
 
 async fn request_get_data_items_most_recent<M>(middleware: &M, mut message: MessageValide)
@@ -337,13 +338,14 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     }
 
     let filtre = doc!{"feed_id": &request.feed_id};
+
     let options = FindOptions::builder()
         .sort(doc!["pub_date": -1])
         .skip(request.skip.unwrap_or(0))
         .limit(request.limit.unwrap_or(50))
         .build();
     let collection = middleware.get_collection_typed::<DataCollectorRow>(COLLECTION_NAME_DATA_DATACOLLECTOR)?;
-    let mut cursor = collection.find(filtre, Some(options)).await?;
+    let mut cursor = collection.find(filtre.clone(), Some(options)).await?;
 
     let mut data: Vec<DataCollectorItemResponse> = Vec::new();
     let mut key_ids = HashSet::new();
@@ -359,10 +361,22 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     let client_certificate = message.certificat.chaine_pem()?;
     let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
 
+    // Estimate feed size
+    let estimated_count = if data.len() > 0 {
+        let options = CountOptions::builder()
+            .limit(1000)
+            .build();
+        let count = collection.count_documents(filtre, options).await?;
+        Some(count as i64)
+    } else {
+        None
+    };
+
     let response = RequestGetDataItemsMostRecentResponse {
         ok: true,
         items: data,
         keys: recrypted_keys,
+        estimated_count,
     };
 
     Ok(Some(middleware.build_reponse(response)?.0))
