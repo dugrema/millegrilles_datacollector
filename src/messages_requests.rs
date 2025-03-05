@@ -6,7 +6,7 @@ use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::ResponseRequestDechiffrageV2Cle;
-use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
+use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE, SECURITE_1_PUBLIC, SECURITE_2_PRIVE};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned};
 use millegrilles_common_rust::mongo_dao::{start_transaction_regular, MongoDao};
@@ -131,8 +131,15 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide)
         let mut filtre = if is_admin {
             doc! {"user_id": null, "deleted": false}  // Only fetch system feeds
         } else {
-            // Regular private user, only load user feeds.
-            doc!("user_id": &user_id, "deleted": false)
+            // Regular private user, only load user feeds and private system feeds.
+            doc!(
+                "$or": [
+                    {"user_id": &user_id},
+                    {"user_id": null, "security_level": {"$in": [SECURITE_1_PUBLIC, SECURITE_2_PRIVE]}},
+                ],
+                "user_id": {"$in": [&user_id, null]},
+                "deleted": false
+            )
         };
 
         let request: RequestGetFeeds = {
@@ -148,33 +155,6 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide)
     };
 
     let response_message = get_feeds(middleware, &mut message, filtre).await?;
-
-    // let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
-    // let mut cursor = collection.find(filtre, None).await?;
-    //
-    // let mut key_ids = HashSet::new();
-    // let mut feeds: Vec<FeedResponse> = Vec::new();
-    //
-    // while cursor.advance().await? {
-    //     let row = match cursor.deserialize_current() {
-    //         Ok(row) => row,
-    //         Err(e) => {
-    //             warn!("request_get_feeds Deserialization error in collection Feeds: {:?}", e);
-    //             continue
-    //         }
-    //     };
-    //     if let Some(cle_id) = row.encrypted_feed_information.cle_id.clone() {
-    //         key_ids.insert(cle_id);
-    //     }
-    //     feeds.push(row.into());
-    // }
-    //
-    // // Recover all decryption keys, re-encrypt them for the client
-    // let key_ids = key_ids.into_iter().collect::<Vec<String>>();
-    // let client_certificate = message.certificat.chaine_pem()?;
-    // let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
-    //
-    // let response_message = RequestGetFeedsResponse {ok: true, feeds, keys: recrypted_keys};
 
     Ok(Some(middleware.build_reponse(response_message)?.0))
 }
@@ -338,7 +318,14 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
             doc! {"user_id": null, "feed_id": &request.feed_id, "deleted": false}  // Only fetch system feeds
         } else {
             // Regular private user, only load user feeds.
-            doc!("user_id": &user_id, "feed_id": &request.feed_id, "deleted": false)
+            doc!(
+                "$or": [
+                    {"user_id": user_id},
+                    {"user_id": null, "security_level": {"$in": [SECURITE_1_PUBLIC, SECURITE_2_PRIVE]}},
+                ],
+                "feed_id": &request.feed_id,
+                "deleted": false
+            )
         };
         let collection_feeds = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
         let _feed = match collection_feeds.find_one(filtre, None).await? {
