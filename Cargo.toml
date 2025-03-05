@@ -1,6 +1,6 @@
 [package]
 name = "millegrilles_datacollector"
-version = "2025.2.5"
+version = "2025.2.6"
 edition = "2024"
 
 [dependencies]
