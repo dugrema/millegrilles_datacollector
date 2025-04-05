@@ -8,6 +8,7 @@ pub const REQUEST_GET_FEEDS: &str = "getFeeds";
 pub const REQUEST_GET_FEEDS_FOR_SCRAPER: &str = "getFeedsForScraper";
 pub const REQUEST_CHECK_EXISTING_DATA_IDS: &str = "checkExistingDataIds";
 pub const REQUEST_GET_DATA_ITEMS_MOST_RECENT: &str = "getDataItemsMostRecent";
+pub const REQUEST_GET_DATA_ITEMS_DATE_RANGE: &str = "getDataItemsDateRange";
 
 
 pub const TRANSACTION_CREATE_FEED: &str = "createFeed";

@@ -16,7 +16,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::Encryp
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::{CountOptions, FindOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::epochseconds;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 
 use crate::constants::*;
 use crate::data_mongodb::{DataCollectorRow, DataCollectorRowIds, DataFeedRow};
@@ -58,6 +58,7 @@ pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager
         REQUEST_GET_FEEDS_FOR_SCRAPER => request_get_feeds_for_scraper(middleware, message).await,
         REQUEST_CHECK_EXISTING_DATA_IDS => request_check_existing_data_ids(middleware, message).await,
         REQUEST_GET_DATA_ITEMS_MOST_RECENT => request_get_data_items_most_recent(middleware, message).await,
+        REQUEST_GET_DATA_ITEMS_DATE_RANGE => request_get_data_items_by_range(middleware, message).await,
         // Unknown request
         _ => Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown request"))?))
     }
@@ -255,10 +256,14 @@ async fn request_check_existing_data_ids<M>(middleware: &M, mut message: Message
 }
 
 #[derive(Deserialize)]
-struct RequestGetDataItemsMostRecent {
+struct RequestGetDataItems {
     feed_id: String,
     skip: Option<u64>,
     limit: Option<i64>,
+    #[serde(default, with="optionepochseconds")]
+    start_date: Option<DateTime<Utc>>,
+    #[serde(default, with="optionepochseconds")]
+    end_date: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -285,7 +290,7 @@ impl From<DataCollectorRow> for DataCollectorItemResponse {
 }
 
 #[derive(Serialize)]
-struct RequestGetDataItemsMostRecentResponse {
+struct RequestGetDataItemsResponse {
     ok: bool,
     items: Vec<DataCollectorItemResponse>,
     keys: MessageMilleGrillesOwned,
@@ -309,7 +314,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 
     let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
 
-    let request: RequestGetDataItemsMostRecent = {
+    let request: RequestGetDataItems = {
         let message_ref = message.message.parse()?;
         message_ref.contenu()?.deserialize()?
     };
@@ -372,11 +377,115 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         None
     };
 
-    let response = RequestGetDataItemsMostRecentResponse {
+    let response = RequestGetDataItemsResponse {
         ok: true,
         items: data,
         keys: recrypted_keys,
         estimated_count,
+    };
+
+    Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+async fn request_get_data_items_by_range<M>(middleware: &M, mut message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    let request: RequestGetDataItems = {
+        let message_ref = message.message.parse()?;
+        message_ref.contenu()?.deserialize()?
+    };
+
+    {
+        let user_id = match message.certificat.get_user_id() {
+            Ok(inner) => match inner {
+                Some(user) => user.to_owned(),
+                None => {
+                    error!("request_get_data_items_by_range Invalid certificate, no user_id - command rejected");
+                    return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
+                }
+            },
+            Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
+        };
+
+        let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+        let filtre = if is_admin {
+            doc! {"user_id": null, "feed_id": &request.feed_id, "deleted": false}
+        } else {
+            // Regular private user, only load user feeds.
+            doc!(
+                "$or": [
+                    {"user_id": user_id},
+                    {"user_id": null, "security_level": {"$in": [SECURITE_1_PUBLIC, SECURITE_2_PRIVE]}},
+                ],
+                "feed_id": &request.feed_id,
+                "deleted": false
+            )
+        };
+        let collection_feeds = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+        let _feed = match collection_feeds.find_one(filtre, None).await? {
+            Some(feed) => feed,
+            None => {
+                return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
+            }
+        };
+    }
+
+    let (start_date, end_date) = match (request.start_date, request.end_date) {
+        (Some(start_date), Some(end_date)) => (start_date, end_date),
+        _ => return Ok(Some(middleware.reponse_err(Some(400), None, Some("Missing start/end date"))?))
+    };
+
+    let filtre = doc!{
+        "feed_id": &request.feed_id,
+        "$and": [
+            {"pub_date": {"$gte": start_date}},
+            {"pub_date": {"$lt": end_date}}
+        ]
+    };
+
+    debug!("request_get_data_items_by_range Filtre {:?}", filtre);
+
+    let response = {
+        let options = FindOptions::builder()
+            .sort(doc!["pub_date": -1])
+            .skip(request.skip.unwrap_or(0))
+            .limit(request.limit.unwrap_or(50))
+            .build();
+        let collection = middleware.get_collection_typed::<DataCollectorRow>(COLLECTION_NAME_DATA_DATACOLLECTOR)?;
+        let mut cursor = collection.find(filtre.clone(), Some(options)).await?;
+
+        let mut data: Vec<DataCollectorItemResponse> = Vec::new();
+        let mut key_ids = HashSet::new();
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            if let Some(cle_id) = row.encrypted_data.cle_id.clone() {
+                key_ids.insert(cle_id);
+            }
+            data.push(row.into());
+        }
+
+        let key_ids = key_ids.into_iter().collect::<Vec<String>>();
+        let client_certificate = message.certificat.chaine_pem()?;
+        let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
+
+        // Estimate feed size
+        let estimated_count = if data.len() > 0 {
+            let options = CountOptions::builder()
+                .limit(1000)
+                .build();
+            let count = collection.count_documents(filtre, options).await?;
+            Some(count as i64)
+        } else {
+            None
+        };
+
+        RequestGetDataItemsResponse {
+            ok: true,
+            items: data,
+            keys: recrypted_keys,
+            estimated_count,
+        }
     };
 
     Ok(Some(middleware.build_reponse(response)?.0))
