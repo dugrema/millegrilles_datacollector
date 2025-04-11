@@ -29,6 +29,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
 
     let commands_public: Vec<&str> = vec![
         TRANSACTION_SAVE_DATA_ITEM,
+        TRANSACTION_SAVE_DATA_ITEM_V2,
     ];
     for cmd in commands_public {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L1Public});

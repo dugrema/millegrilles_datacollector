@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use millegrilles_common_rust::bson;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::DechiffrageInterMillegrilleOwned;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::epochseconds;
-use crate::data_mongodb::DataCollectorRow;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, epochmilliseconds, optionepochmilliseconds};
+use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow};
 
 #[derive(Serialize, Deserialize)]
 pub struct FileItem {
@@ -40,6 +39,43 @@ impl Into<DataCollectorRow> for SaveDataItemTransaction {
             pub_date: self.pub_date,
             encrypted_data: self.encrypted_data,
             files: self.files,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SaveDataItemTransactionV2 {
+    /// Unique data item identifier for this feed
+    pub data_id: String,
+    /// Source of the data item
+    pub feed_id: String,
+    /// Item publication or content date
+    #[serde(with="epochmilliseconds")]
+    pub save_date: DateTime<Utc>,
+    pub data_fuuid: String,
+    pub key_ids: Vec<String>,
+    /// Item publication or content date
+    #[serde(default, with="optionepochmilliseconds")]
+    pub pub_date_start: Option<DateTime<Utc>>,
+    /// Item publication or content date
+    #[serde(default, with="optionepochmilliseconds")]
+    pub pub_date_end: Option<DateTime<Utc>>,
+    /// Files associated with this data item
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_fuuids: Option<Vec<String>>,
+}
+
+impl Into<DataCollectorFilesRow> for SaveDataItemTransactionV2 {
+    fn into(self) -> DataCollectorFilesRow {
+        DataCollectorFilesRow {
+            data_id: self.data_id,
+            feed_id: self.feed_id,
+            save_date: self.save_date,
+            data_fuuid: self.data_fuuid,
+            key_ids: self.key_ids,
+            pub_date_start: self.pub_date_start,
+            pub_date_end: self.pub_date_end,
+            attached_fuuids: self.attached_fuuids,
         }
     }
 }
@@ -135,4 +171,17 @@ pub struct DeleteFeedTransaction {
 #[derive(Serialize, Deserialize)]
 pub struct RestoreFeedTransaction {
     pub feed_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FileItemV2 {
+    /// File unique identifier on filehosts
+    pub fuuid: String,
+    pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cle_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<std::string::String>,
 }

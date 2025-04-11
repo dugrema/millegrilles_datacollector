@@ -1,6 +1,7 @@
 use log::{debug, error, warn};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::RequeteDechiffrageMessage;
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
@@ -8,7 +9,9 @@ use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::Mess
 use millegrilles_common_rust::mongo_dao::{start_transaction_regular, MongoDao};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::error::Error as CommonError;
+use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2};
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::serde_json;
@@ -17,7 +20,7 @@ use crate::constants::*;
 use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow};
 use crate::file_maintenance::{claim_and_visit_files, claim_files};
 use crate::keymaster::transmit_attached_key;
-use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, SaveDataItemTransaction, UpdateFeedTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, FileItem, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction};
 
 pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
@@ -60,6 +63,7 @@ pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager:
         TRANSACTION_UPDATE_FEED => command_update_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_DELETE_FEED => command_delete_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_SAVE_DATA_ITEM => command_save_data_item(middleware, message, manager, &mut session).await,
+        TRANSACTION_SAVE_DATA_ITEM_V2 => command_save_data_item_v2(middleware, message, manager, &mut session).await,
         // Unknown command
         _ => {
             Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown command"))?))
@@ -287,6 +291,66 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         debug!("command_save_data_item Claiming fuuids {:?}", fuuids);
         claim_and_visit_files(middleware, fuuids).await?;
     }
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+async fn command_save_data_item_v2<M>(middleware: &M, mut message: MessageValide, manager: &DataCollectorDomainManager, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if ! message.certificat.verifier_roles_string(vec!["web_scraper".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
+    } else if ! message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
+    }
+
+    let mut message_owned = message.message.parse_to_owned()?;
+    let transaction: SaveDataItemTransactionV2 = message_owned.deserialize()?;
+
+    // Collect all fuuids, including for the data file and attached files.
+    let mut fuuids_to_claim = vec![transaction.data_fuuid.clone()];
+    if let Some(files) = transaction.attached_fuuids.as_ref() {
+        for file in files {
+            fuuids_to_claim.push(file.clone());
+        }
+    }
+
+    // Check if the data item already exists
+    let collection = middleware.get_collection_typed::<DataCollectorRowIds>(COLLECTION_NAME_SRC_DATAFILES)?;
+    let filtre = doc!{"feed_id": &transaction.feed_id, "data_id": &transaction.data_id};
+    let mut cursor = collection.find(filtre, None).await?;
+    if cursor.advance().await? {
+        return Ok(Some(middleware.reponse_err(Some(409), None, Some("Data item already exists"))?));
+    }
+
+    let key_command = match message_owned.attachements {
+        Some(mut inner) => inner.remove("key"),
+        None => None
+    };
+
+    if let Some(key) = key_command {
+        match transmit_attached_key(middleware, key).await {
+            Ok(Some(error)) => {
+                error!("command_save_data_item Invalid key content - command rejected");
+                return Ok(Some(error));
+            },
+            Err(e) => {
+                error!("command_save_data_item Error {:?} - command rejected", e);
+                return Ok(Some(middleware.reponse_err(Some(1), None, Some(format!("Error: {:?}", e).as_str()))?));
+            },
+            Ok(None) => ()  // Key saved successfully
+        }
+    };
+
+    if let Err(e) = sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await {
+        error!("command_save_data_item Error processing transaction - command rejected : {:?}", e);
+        return Ok(Some(middleware.reponse_err(Some(500), None, Some(format!("Error: {:?}", e).as_str()))?));
+    }
+
+    // Emit file claims
+    debug!("command_save_data_item Claiming fuuids {:?}", fuuids_to_claim);
+    claim_and_visit_files(middleware, fuuids_to_claim).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }

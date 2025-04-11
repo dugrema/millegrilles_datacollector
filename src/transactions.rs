@@ -11,9 +11,9 @@ use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::serde_json;
 
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorRow, DataCollectorRowIds, DataFeedRow};
+use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow};
 use crate::domain_manager::DataCollectorDomainManager;
-use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, SaveDataItemTransaction, UpdateFeedTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction};
 
 pub async fn consume_transaction<M, T>(_gestionnaire: &DataCollectorDomainManager, middleware: &M, transaction: T, session: &mut ClientSession)
     -> Result<(), CommonError>
@@ -39,6 +39,7 @@ where
         TRANSACTION_UPDATE_FEED => transaction_update_feed(middleware, transaction, session).await,
         TRANSACTION_DELETE_FEED => transaction_delete_feed(middleware, transaction, session).await,
         TRANSACTION_SAVE_DATA_ITEM => transaction_save_data_item(middleware, transaction, session).await,
+        TRANSACTION_SAVE_DATA_ITEM_V2 => transaction_save_data_item_v2(middleware, transaction, session).await,
         _ => Err(format!("core_backup.aiguillage_transaction: Transaction {} est de type non gere : {}", transaction.transaction.id, action))?
     }
 }
@@ -175,6 +176,25 @@ async fn transaction_save_data_item<M>(middleware: &M, transaction: TransactionV
     let data_item: DataCollectorRow = transaction_save_data_item.into();
 
     let collection = middleware.get_collection_typed::<DataCollectorRow>(COLLECTION_NAME_DATA_DATACOLLECTOR)?;
+    collection.insert_one_with_session(data_item, None, session).await?;
+
+    Ok(())
+}
+
+async fn transaction_save_data_item_v2<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
+                                       -> Result<(), CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    if ! transaction.certificat.verifier_roles_string(vec!["web_scraper".to_string()])? {
+        Err("transaction_save_data_itemasync Invalid role")?;
+    } else if ! transaction.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        Err("transaction_save_data_itemasync Invalid security")?;
+    }
+
+    let transaction_save_data_item: SaveDataItemTransactionV2 = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+    let data_item: DataCollectorFilesRow = transaction_save_data_item.into();
+
+    let collection = middleware.get_collection_typed::<DataCollectorFilesRow>(COLLECTION_NAME_SRC_DATAFILES)?;
     collection.insert_one_with_session(data_item, None, session).await?;
 
     Ok(())

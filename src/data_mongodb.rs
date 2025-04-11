@@ -56,3 +56,25 @@ pub struct DataCollectorRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<FileItem>>,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct DataCollectorFilesRow {
+    /// Unique data item identifier for this feed
+    pub data_id: String,
+    /// Source of the data item
+    pub feed_id: String,
+    /// Item publication or content date
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub save_date: DateTime<Utc>,
+    pub data_fuuid: String,
+    pub key_ids: Vec<String>,
+    /// Item publication or content date
+    #[serde(default, with="opt_chrono_datetime_as_bson_datetime", skip_serializing_if = "Option::is_none")]
+    pub pub_date_start: Option<DateTime<Utc>>,
+    /// Item publication or content date
+    #[serde(default, with="opt_chrono_datetime_as_bson_datetime", skip_serializing_if = "Option::is_none")]
+    pub pub_date_end: Option<DateTime<Utc>>,
+    /// Files associated with this data item
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_fuuids: Option<Vec<String>>,
+}
