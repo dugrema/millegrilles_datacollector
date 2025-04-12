@@ -8,7 +8,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use serde::{Deserialize, Serialize};
-use crate::constants::COLLECTION_NAME_DATA_DATACOLLECTOR;
+use crate::constants::{COLLECTION_NAME_DATA_DATACOLLECTOR, COLLECTION_NAME_SRC_DATAFILES};
 
 #[derive(Serialize)]
 struct RequeteFuuidsVisites<'a> {
@@ -78,6 +78,15 @@ struct FuuidRow {
 }
 
 pub async fn claim_all_files<M>(middleware: &M)
+                                -> Result<(), CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    claim_datacollector_files(middleware).await?;
+    claim_datasource_files(middleware).await?;
+    Ok(())
+}
+
+pub async fn claim_datacollector_files<M>(middleware: &M)
     -> Result<(), CommonError>
 where M: GenerateurMessages + MongoDao
 {
@@ -118,6 +127,49 @@ where M: GenerateurMessages + MongoDao
     }
 
     debug!("claim_all_files Done");
+
+    Ok(())
+}
+
+pub async fn claim_datasource_files<M>(middleware: &M)
+                                          -> Result<(), CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    debug!("claim_datasource_files Start");
+    let collection = middleware.get_collection(COLLECTION_NAME_SRC_DATAFILES)?;
+
+    // Extract all fuuids into single rows
+    let pipeline = vec![
+        doc!{"$project": {"fuuid": {"$concatArrays": [["$data_fuuid"], "$attached_fuuids"]}}},
+        doc!{"$unwind": {"path": "$fuuid"}},
+        doc!{"$unset": "_id"},   // Recreates _id to avoid duplicates
+        // doc!{"$out": "DataCollector/test"},
+    ];
+
+    let mut fuuids_batch = Vec::with_capacity(100);
+    let mut batch_no = 0;
+
+    let mut cursor = collection.aggregate(pipeline, None).await?;
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        let row: FuuidRow = convertir_bson_deserializable(row)?;
+        fuuids_batch.push(row.fuuid);
+
+        if fuuids_batch.len() >= 100 {
+            // Run batch
+            debug!("Claims {} files", fuuids_batch.len());
+            claim_files(middleware, Some(batch_no), Some(false), &fuuids_batch).await?;
+            fuuids_batch.clear();
+            batch_no += 1;
+        }
+    }
+
+    if ! fuuids_batch.is_empty() {
+        debug!("Claims {} files (final batch)", fuuids_batch.len());
+        claim_files(middleware, Some(batch_no), Some(true), fuuids_batch).await?;
+    }
+
+    debug!("claim_datasource_files Done");
 
     Ok(())
 }

@@ -29,7 +29,8 @@ where M: MiddlewareMessages + BackupStarter + MongoDao
     let minutes = date_epoch.minute();
     let hours = date_epoch.hour();
 
-    if hours == 9 && minutes == 39 {
+    if hours == 9 && minutes == 39
+    {
         if let Err(e) = claim_all_files(middleware).await {
             error!("consume_ticker Error during claim all files: {:?}", e);
         }
