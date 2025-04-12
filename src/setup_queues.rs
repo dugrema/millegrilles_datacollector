@@ -12,6 +12,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
     let requetes_privees: Vec<&str> = vec![
         REQUEST_GET_FEEDS_FOR_SCRAPER,
         REQUEST_CHECK_EXISTING_DATA_IDS,
+        REQUEST_GET_FUUIDS_VOLATILE,
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L1Public});
@@ -30,6 +31,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
     let commands_public: Vec<&str> = vec![
         TRANSACTION_SAVE_DATA_ITEM,
         TRANSACTION_SAVE_DATA_ITEM_V2,
+        COMMAND_ADD_FUUIDS_VOLATILE,
     ];
     for cmd in commands_public {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L1Public});

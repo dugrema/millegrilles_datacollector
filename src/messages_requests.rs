@@ -22,6 +22,7 @@ use crate::constants::*;
 use crate::data_mongodb::{DataCollectorRow, DataCollectorRowIds, DataFeedRow};
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::keymaster::{get_decrypted_keys, get_encrypted_keys};
+use crate::messages_commands::FuuidVolatile;
 use crate::transactions_struct::{CreateFeedTransaction, FileItem};
 
 pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager: &DataCollectorDomainManager)
@@ -59,6 +60,7 @@ pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager
         REQUEST_CHECK_EXISTING_DATA_IDS => request_check_existing_data_ids(middleware, message).await,
         REQUEST_GET_DATA_ITEMS_MOST_RECENT => request_get_data_items_most_recent(middleware, message).await,
         REQUEST_GET_DATA_ITEMS_DATE_RANGE => request_get_data_items_by_range(middleware, message).await,
+        REQUEST_GET_FUUIDS_VOLATILE => request_get_fuuids_volatile(middleware, message).await,
         // Unknown request
         _ => Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown request"))?))
     }
@@ -489,4 +491,37 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     };
 
     Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+#[derive(Deserialize)]
+struct RequestGetFuuidsVolatile {correlations: Vec<String>}
+
+#[derive(Serialize)]
+struct RequestGetFuuidsVolatileResponse {ok: bool, files: Vec<FuuidVolatile>}
+
+async fn request_get_fuuids_volatile<M>(middleware: &M, mut message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if ! message.certificat.verifier_roles_string(vec!["web_scraper".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
+    } else if ! message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
+    }
+
+    let message_ref = message.message.parse()?;
+    let request: RequestGetFuuidsVolatile = message_ref.contenu()?.deserialize()?;
+
+    let filtre = doc! {"correlation": {"$in": &request.correlations}};
+    let collection = middleware.get_collection_typed::<FuuidVolatile>(COLLECTION_NAME_SRC_FILES_VOLATILE)?;
+    let mut cursor = collection.find(filtre, None).await?;
+
+    let mut files = Vec::with_capacity(request.correlations.len());
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        files.push(row);
+    }
+
+    let response_message = RequestGetFuuidsVolatileResponse {ok: true, files};
+    Ok(Some(middleware.build_reponse(response_message)?.0))
 }

@@ -5,8 +5,8 @@ use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::RequeteDechiffrageMessage;
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
-use millegrilles_common_rust::mongo_dao::{start_transaction_regular, MongoDao};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, optionepochseconds};
+use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, start_transaction_regular, MongoDao};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
@@ -14,7 +14,8 @@ use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_seria
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
-use millegrilles_common_rust::serde_json;
+use millegrilles_common_rust::{chrono, serde_json};
+use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::constants::*;
 use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow};
@@ -64,6 +65,7 @@ pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager:
         TRANSACTION_DELETE_FEED => command_delete_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_SAVE_DATA_ITEM => command_save_data_item(middleware, message, manager, &mut session).await,
         TRANSACTION_SAVE_DATA_ITEM_V2 => command_save_data_item_v2(middleware, message, manager, &mut session).await,
+        COMMAND_ADD_FUUIDS_VOLATILE => command_add_fuuids_volatile(middleware, message).await,
         // Unknown command
         _ => {
             Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown command"))?))
@@ -351,6 +353,54 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     // Emit file claims
     debug!("command_save_data_item Claiming fuuids {:?}", fuuids_to_claim);
     claim_and_visit_files(middleware, fuuids_to_claim).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FuuidVolatile {
+    pub correlation: String,
+    pub fuuid: String,
+    pub format: String,
+    pub cle_id: String,
+    pub nonce: Option<String>,
+    pub compression: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CommandAddFuuidsVolatile {
+    files: Vec<FuuidVolatile>,
+    #[serde(default, with="optionepochseconds")]
+    expiration: Option<DateTime<Utc>>,
+}
+
+async fn command_add_fuuids_volatile<M>(middleware: &M, mut message: MessageValide)
+                                        -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if !message.certificat.verifier_roles_string(vec!["web_scraper".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
+    } else if !message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
+    }
+
+    let mut message_owned = message.message.parse_to_owned()?;
+    let command: CommandAddFuuidsVolatile = message_owned.deserialize()?;
+
+    let expiration = command.expiration.unwrap_or(Utc::now() + chrono::Duration::days(7));
+    for file in command.files {
+        let filtre = doc!{"correlation": &file.correlation};
+        let mut set_on_insert = convertir_to_bson(file)?;
+        set_on_insert.insert("expiration", &expiration);
+        set_on_insert.insert("created", Utc::now());
+        let ops = doc!{
+            "$setOnInsert": set_on_insert,
+            "$currentDate": {"modified": true}
+        };
+        let collection = middleware.get_collection(COLLECTION_NAME_SRC_FILES_VOLATILE)?;
+        let options = UpdateOptions::builder().upsert(true).build();
+        collection.update_one(filtre, ops, options).await?;
+    }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
