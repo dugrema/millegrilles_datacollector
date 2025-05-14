@@ -1,4 +1,5 @@
 pub const DOMAIN_NAME: &str = "DataCollector";
+pub const DOMAIN_DATASOURCEMAPPER: &str = "datasourcemapper";
 
 pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const COLLECTION_NAME_FEEDS: &str = "DataCollector/feeds";
@@ -17,6 +18,7 @@ pub const REQUEST_GET_FUUIDS_VOLATILE: &str = "getFuuidsVolatile";
 pub const REQUEST_GET_FEED_DATA: &str = "getFeedData";
 
 pub const COMMAND_ADD_FUUIDS_VOLATILE: &str = "addFuuidsVolatile";
+pub const COMMAND_PROCESS_VIEW: &str = "processView";
 
 
 pub const TRANSACTION_CREATE_FEED: &str = "createFeed";

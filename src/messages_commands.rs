@@ -1,11 +1,12 @@
+use std::collections::HashSet;
 use log::{debug, error, warn};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
-use millegrilles_common_rust::common_messages::RequeteDechiffrageMessage;
+use millegrilles_common_rust::common_messages::{verifier_reponse_ok, RequeteDechiffrageMessage};
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
-use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, optionepochseconds};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, optionepochseconds, RoutageMessage};
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, start_transaction_regular, MongoDao};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::error::Error as CommonError;
@@ -18,9 +19,9 @@ use millegrilles_common_rust::{chrono, serde_json};
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow};
+use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow, FeedViewRow};
 use crate::file_maintenance::{claim_and_visit_files, claim_files};
-use crate::keymaster::transmit_attached_key;
+use crate::keymaster::{fetch_decryption_keys, transmit_attached_key};
 use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, FileItem, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction, UpdateFeedViewTransaction};
 
 pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager: &DataCollectorDomainManager)
@@ -68,6 +69,7 @@ pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager:
         TRANSACTION_CREATE_FEED_VIEW => command_create_feed_view(middleware, message, manager, &mut session).await,
         TRANSACTION_UPDATE_FEED_VIEW => command_update_feed_view(middleware, message, manager, &mut session).await,
         COMMAND_ADD_FUUIDS_VOLATILE => command_add_fuuids_volatile(middleware, message).await,
+        COMMAND_PROCESS_VIEW => command_process_view(middleware, message, &mut session).await,
         // Unknown command
         _ => {
             Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown command"))?))
@@ -528,6 +530,94 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     if let Err(e) = sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await {
         warn!("command_update_feed_view Error in transaction processing - command rejected: {:?}", e);
         return Ok(Some(middleware.reponse_err(Some(1), None, Some(e.to_string().as_str()))?));
+    }
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+#[derive(Deserialize)]
+struct ProcessViewRequest {
+    feed_view_id: String,
+}
+
+#[derive(Serialize)]
+struct ProcessStartEvent {
+    feed_view_id: String,
+}
+
+async fn command_process_view<M>(middleware: &M, mut message: MessageValide, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    let mut message_owned = message.message.parse_to_owned()?;
+
+    let user_id = match message.certificat.get_user_id() {
+        Ok(inner) => match inner {
+            Some(user) => user.to_owned(),
+            None => {
+                error!("command_process_view Invalid certificate, no user_id - command rejected");
+                return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
+            }
+        },
+        Err(e) => Err(format!("command_update_feed_view Erreur get_user_id() : {:?}", e))?
+    };
+    let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+
+    // Deserialize to validate the format
+    let command: ProcessViewRequest = message_owned.deserialize()?;
+
+    // Check if the user is allowed to create a feed view on this feed
+    let filtre_view = doc!{"feed_view_id": &command.feed_view_id};
+    let collection_feed_view = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
+    let feed_view = match collection_feed_view.find_one(filtre_view.clone(), None).await? {
+        Some(inner) => inner,
+        None => {
+            error!("command_process_view No feed view with the provided Id");
+            return Ok(Some(middleware.reponse_err(Some(404), None, Some("No such feed view"))?));
+        }
+    };
+
+    let feed_id = &feed_view.feed_id;
+    let filtre_feed = doc!{"feed_id": feed_id};
+    let collection_feed = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    let feed = match collection_feed.find_one(filtre_feed, None).await? {
+        Some(feed) => feed,
+        None => {
+            error!("command_process_view Unknown feed_id {} - command rejected", feed_id);
+            return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
+        }
+    };
+
+    if feed.user_id == Some(user_id) {
+        // Ok, feed belongs to user
+    } else if is_admin && feed.user_id.is_none() {
+        // Ok, system feed managed by admin
+    }  else {
+        error!("command_process_view Feed_id {} - user not authorized", feed_id);
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Unauthorized"))?));
+    }
+
+    // User is authorized. Start the process.
+    let ops = doc!{
+        "$set": {"ready": false},
+        "$currentDate": {"modification_date": true, "processing_start_date": true},
+    };
+    collection_feed_view.update_one_with_session(filtre_view, ops, None, session).await?;
+
+    // Emit command to request start of processing of this feed view.
+    let process_event = ProcessStartEvent {feed_view_id: feed_view.feed_id.to_owned()};
+    let routage = RoutageMessageAction::builder(DOMAIN_DATASOURCEMAPPER, "processFeedView", vec![Securite::L3Protege]).build();
+    match middleware.transmettre_commande(routage, process_event).await? {
+        Some(message) => {
+            if ! verifier_reponse_ok(&message) {
+                error!("command_process_view Error starting feed processing: {:?}", message);
+                return Ok(Some(middleware.reponse_err(Some(500), None, Some("Error in response"))?));
+            }
+        },
+        None => {
+            error!("command_process_view No response when starting process");
+            return Ok(Some(middleware.reponse_err(Some(500), None, Some("No response when starting process"))?));
+        }
     }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
