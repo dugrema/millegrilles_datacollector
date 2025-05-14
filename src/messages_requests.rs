@@ -19,9 +19,9 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorRow, DataCollectorRowIds, DataFeedRow};
+use crate::data_mongodb::{DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewRow};
 use crate::domain_manager::DataCollectorDomainManager;
-use crate::keymaster::{get_decrypted_keys, get_encrypted_keys};
+use crate::keymaster::{fetch_decryption_keys, get_decrypted_keys, get_encrypted_keys};
 use crate::messages_commands::FuuidVolatile;
 use crate::transactions_struct::{CreateFeedTransaction, FileItem};
 
@@ -57,6 +57,7 @@ pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager
         // Commandes standard
         REQUEST_GET_FEEDS => request_get_feeds(middleware, message).await,
         REQUEST_GET_FEEDS_FOR_SCRAPER => request_get_feeds_for_scraper(middleware, message).await,
+        REQUEST_GET_FEED_VIEWS => request_get_feed_views(middleware, message).await,
         REQUEST_CHECK_EXISTING_DATA_IDS => request_check_existing_data_ids(middleware, message).await,
         REQUEST_GET_DATA_ITEMS_MOST_RECENT => request_get_data_items_most_recent(middleware, message).await,
         REQUEST_GET_DATA_ITEMS_DATE_RANGE => request_get_data_items_by_range(middleware, message).await,
@@ -599,13 +600,142 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 
     let mut response = FeedDataResponse {ok: true, items: rows, keys: None};
     
-    if ! key_ids.is_empty() {
-        debug!("Fetch decryption keys");
-        let key_ids = key_ids.into_iter().collect::<Vec<String>>();
-        let client_certificate = message.certificat.chaine_pem()?;
-        let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
-        response.keys = Some(recrypted_keys);
-    }
+    // if ! key_ids.is_empty() {
+    //     debug!("Fetch decryption keys");
+    //     let key_ids = key_ids.into_iter().collect::<Vec<String>>();
+    //     let client_certificate = message.certificat.chaine_pem()?;
+    //     let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
+    //     response.keys = Some(recrypted_keys);
+    // }
+    response.keys = fetch_decryption_keys(middleware, &message, key_ids).await?;
     
     Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+#[derive(Deserialize)]
+struct FeedViewsRequest {
+    feed_id: String,
+    feed_view_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedViewResponse {
+    pub feed_view_id: String,
+    pub feed_id: String,
+    pub encrypted_data: EncryptedDocument,
+    pub name: Option<String>,
+    pub active: bool,
+    pub decrypted: bool,
+    pub mapping_code: String,
+    #[serde(with="epochseconds")]
+    pub creation_date: DateTime<Utc>,
+    #[serde(with="epochseconds")]
+    pub modification_date: DateTime<Utc>,
+    pub deleted: bool,
+}
+
+impl From<FeedViewRow> for FeedViewResponse {
+    fn from(value: FeedViewRow) -> Self {
+        Self {
+            feed_view_id: value.feed_view_id,
+            feed_id: value.feed_id,
+            encrypted_data: value.encrypted_data,
+            name: value.name,
+            active: value.active,
+            decrypted: value.decrypted,
+            mapping_code: value.mapping_code,
+            creation_date: value.creation_date,
+            modification_date: value.modification_date,
+            deleted: value.deleted,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct FeedViewsResponse {
+    ok: bool,
+    feed: FeedResponse,
+    views: Vec<FeedViewResponse>,
+    keys: Option<MessageMilleGrillesOwned>,
+}
+
+async fn request_get_feed_views<M>(middleware: &M, mut message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    let request: FeedViewsRequest = {
+        let message_ref = message.message.parse()?;
+        message_ref.contenu()?.deserialize()?
+    };
+
+    let user_id = match message.certificat.get_user_id() {
+        Ok(inner) => match inner {
+            Some(user) => user.to_owned(),
+            None => {
+                error!("command_create_feed Invalid certificate, no user_id - command rejected");
+                return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
+            }
+        },
+        Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
+    };
+
+    let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+
+    let feed_filtre = {
+        let request: FeedViewsRequest = {
+            let message_ref = message.message.parse()?;
+            message_ref.contenu()?.deserialize()?
+        };
+
+        let mut filtre = if is_admin {
+            doc! {"feed_id": &request.feed_id, "user_id": null, "deleted": false}  // Only fetch system feeds
+        } else {
+            // Regular private user, only load user feeds and private system feeds.
+            doc!(
+                "feed_id": &request.feed_id,
+                "user_id": &user_id,
+                "deleted": false
+            )
+        };
+
+        filtre
+    };
+
+    let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    let feed = collection.find_one(feed_filtre, None).await?;
+
+    let feed = match feed {
+        Some(feed) => feed,
+        None => {
+            error!("request_get_feed_views Feed not found or access denied");
+            return Ok(Some(middleware.reponse_err(Some(404), None, Some("Feed not found"))?));
+        }
+    };
+
+    let mut key_ids = HashSet::with_capacity(50);
+    if let Some(cle_id) = feed.encrypted_feed_information.cle_id.as_ref() {
+        key_ids.insert(cle_id.to_owned());
+    }
+
+    let mut views_filtre = doc!{"feed_id": &request.feed_id, "deleted": false};
+    if let Some(feed_view_id) = request.feed_view_id {
+        views_filtre.insert("feed_view_id", feed_view_id);
+    }
+
+    let collection = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
+    let mut cursor = collection.find(views_filtre, None).await?;
+    let mut views: Vec<FeedViewResponse> = Vec::with_capacity(50);
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        if let Some(cle_id) = row.encrypted_data.cle_id.as_ref() {
+            key_ids.insert(cle_id.to_owned());
+        }
+        views.push(row.into());
+    }
+
+    let mut response_message = FeedViewsResponse {ok: true, feed: feed.into(), views, keys: None};
+
+    response_message.keys = fetch_decryption_keys(middleware, &message, key_ids).await?;
+
+    Ok(Some(middleware.build_reponse_chiffree(response_message, message.certificat.as_ref())?.0))
 }

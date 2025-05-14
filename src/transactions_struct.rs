@@ -190,6 +190,18 @@ pub struct FileItemV2 {
 pub struct CreateFeedViewTransaction {
     pub feed_id: String,
     pub encrypted_data: EncryptedDocument,
+    pub name: Option<String>,
+    pub active: bool,
+    pub decrypted: bool,
+    pub mapping_code: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UpdateFeedViewTransaction {
+    pub feed_id: String,
+    pub feed_view_id: String,
+    pub encrypted_data: EncryptedDocument,
+    pub name: Option<String>,
     pub active: bool,
     pub decrypted: bool,
     pub mapping_code: String,

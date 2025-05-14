@@ -13,7 +13,7 @@ use millegrilles_common_rust::serde_json;
 use crate::constants::*;
 use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewRow};
 use crate::domain_manager::DataCollectorDomainManager;
-use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction, UpdateFeedViewTransaction};
 
 pub async fn consume_transaction<M, T>(_gestionnaire: &DataCollectorDomainManager, middleware: &M, transaction: T, session: &mut ClientSession)
     -> Result<(), CommonError>
@@ -41,6 +41,7 @@ where
         TRANSACTION_SAVE_DATA_ITEM => transaction_save_data_item(middleware, transaction, session).await,
         TRANSACTION_SAVE_DATA_ITEM_V2 => transaction_save_data_item_v2(middleware, transaction, session).await,
         TRANSACTION_CREATE_FEED_VIEW => transaction_create_feed_view(middleware, transaction, session).await,
+        TRANSACTION_UPDATE_FEED_VIEW => transaction_update_feed_view(middleware, transaction, session).await,
         _ => Err(format!("core_backup.aiguillage_transaction: Transaction {} est de type non gere : {}", transaction.transaction.id, action))?
     }
 }
@@ -214,16 +215,48 @@ where M: GenerateurMessages + MongoDao
         feed_view_id: transaction_id,
         feed_id: transaction_create_feed_view.feed_id,
         encrypted_data: transaction_create_feed_view.encrypted_data,
-        name: None,
+        name: transaction_create_feed_view.name,
         active: transaction_create_feed_view.active,
         decrypted: transaction_create_feed_view.decrypted,
         mapping_code: transaction_create_feed_view.mapping_code,
         creation_date: estampille,
         modification_date: now,
+        deleted: false,
+        ready: false,
     };
 
     let collection = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
     collection.insert_one_with_session(data_row, None, session).await?;
+
+    Ok(())
+}
+
+async fn transaction_update_feed_view<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession) -> Result<(), CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    let transaction_update_feed_view: UpdateFeedViewTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+
+    let filtre = doc! {
+        "feed_view_id": transaction_update_feed_view.feed_view_id,
+        "feed_id": transaction_update_feed_view.feed_id,  // For safety (access rules)
+    };
+    let ops = doc!{
+        "$set": {
+            "encrypted_data": convertir_to_bson(transaction_update_feed_view.encrypted_data)?,
+            "name": transaction_update_feed_view.name,
+            "active": transaction_update_feed_view.active,
+            "decrypted": transaction_update_feed_view.decrypted,
+            "mapping_code": transaction_update_feed_view.mapping_code,
+        },
+        "$currentDate": {"modification_date": true},
+    };
+
+    let collection = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
+    let result = collection.update_one_with_session(filtre, ops, None, session).await?;
+
+    if result.matched_count != 1 {
+        Err("transaction_update_feed_view Update had no effect (no match)")?;
+    }
 
     Ok(())
 }

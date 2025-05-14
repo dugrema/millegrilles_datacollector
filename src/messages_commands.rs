@@ -21,7 +21,7 @@ use crate::constants::*;
 use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow};
 use crate::file_maintenance::{claim_and_visit_files, claim_files};
 use crate::keymaster::transmit_attached_key;
-use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, FileItem, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, FileItem, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction, UpdateFeedViewTransaction};
 
 pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
@@ -66,6 +66,7 @@ pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager:
         TRANSACTION_SAVE_DATA_ITEM => command_save_data_item(middleware, message, manager, &mut session).await,
         TRANSACTION_SAVE_DATA_ITEM_V2 => command_save_data_item_v2(middleware, message, manager, &mut session).await,
         TRANSACTION_CREATE_FEED_VIEW => command_create_feed_view(middleware, message, manager, &mut session).await,
+        TRANSACTION_UPDATE_FEED_VIEW => command_update_feed_view(middleware, message, manager, &mut session).await,
         COMMAND_ADD_FUUIDS_VOLATILE => command_add_fuuids_volatile(middleware, message).await,
         // Unknown command
         _ => {
@@ -443,7 +444,7 @@ async fn command_create_feed_view<M>(middleware: &M, mut message: MessageValide,
     } else if is_admin && feed.user_id.is_none() {
         // Ok, system feed managed by admin
     }  else {
-        error!("command_create_feed_view Deleting feed_id {} - user not authorized", command.feed_id);
+        error!("command_create_feed_view Feed_id {} - user not authorized", command.feed_id);
         return Ok(Some(middleware.reponse_err(Some(401), None, Some("Unauthorized"))?));
     }
 
@@ -476,6 +477,56 @@ async fn command_create_feed_view<M>(middleware: &M, mut message: MessageValide,
     // Save and run new transaction
     if let Err(e) = sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await {
         warn!("command_create_feed Error in transaction processing - command rejected: {:?}", e);
+        return Ok(Some(middleware.reponse_err(Some(1), None, Some(e.to_string().as_str()))?));
+    }
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+async fn command_update_feed_view<M>(middleware: &M, mut message: MessageValide, manager: &DataCollectorDomainManager, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    let mut message_owned = message.message.parse_to_owned()?;
+
+    let user_id = match message.certificat.get_user_id() {
+        Ok(inner) => match inner {
+            Some(user) => user.to_owned(),
+            None => {
+                error!("command_update_feed_view Invalid certificate, no user_id - command rejected");
+                return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
+            }
+        },
+        Err(e) => Err(format!("command_update_feed_view Erreur get_user_id() : {:?}", e))?
+    };
+    let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+
+    // Deserialize to validate the format
+    let command: UpdateFeedViewTransaction = message_owned.deserialize()?;
+
+    // Check if the user is allowed to create a feed view on this feed
+    let filtre = doc!{"feed_id": &command.feed_id};
+    let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    let feed = match collection.find_one(filtre, None).await? {
+        Some(feed) => feed,
+        None => {
+            error!("command_update_feed_view Unknown feed_id {} - command rejected", command.feed_id);
+            return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
+        }
+    };
+
+    if feed.user_id == Some(user_id) {
+        // Ok, feed belongs to user
+    } else if is_admin && feed.user_id.is_none() {
+        // Ok, system feed managed by admin
+    }  else {
+        error!("command_update_feed_view Feed_id {} - user not authorized", command.feed_id);
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Unauthorized"))?));
+    }
+
+    // Save and run new transaction
+    if let Err(e) = sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await {
+        warn!("command_update_feed_view Error in transaction processing - command rejected: {:?}", e);
         return Ok(Some(middleware.reponse_err(Some(1), None, Some(e.to_string().as_str()))?));
     }
 

@@ -92,4 +92,6 @@ pub struct FeedViewRow {
     pub creation_date: DateTime<Utc>,
     #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
     pub modification_date: DateTime<Utc>,
+    pub deleted: bool,
+    pub ready: bool,
 }

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use log::{debug, error};
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::common_messages::{ReponseRequeteDechiffrageV2, RequeteDechiffrage, ResponseRequestDechiffrageV2Cle};
@@ -7,7 +8,7 @@ use millegrilles_common_rust::messages_generiques::ReponseCommande;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned};
 use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
-use millegrilles_common_rust::recepteur_messages::TypeMessage;
+use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::Value;
 use millegrilles_common_rust::error::Error as CommonError;
@@ -123,5 +124,21 @@ pub async fn get_decrypted_keys<M>(middleware: &M, cle_ids: &Vec<String>)
         }
     } else {
         Err("request_sync_directory Unable to get decryption keys - wrong response type")?
+    }
+}
+
+
+pub async fn fetch_decryption_keys<M>(middleware: &M, message: &MessageValide, key_ids: HashSet<String>)
+                                  -> Result<Option<MessageMilleGrillesOwned>, CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    if !key_ids.is_empty() {
+        debug!("Fetch decryption keys");
+        let key_ids = key_ids.into_iter().collect::<Vec<String>>();
+        let client_certificate = message.certificat.chaine_pem()?;
+        let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
+        Ok(Some(recrypted_keys))
+    } else {
+        Ok(None)
     }
 }
