@@ -14,7 +14,7 @@ use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::mongodb::ClientSession;
-use millegrilles_common_rust::mongodb::options::{CountOptions, FindOptions};
+use millegrilles_common_rust::mongodb::options::{CountOptions, FindOptions, Hint};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 
@@ -61,6 +61,7 @@ pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager
         REQUEST_GET_DATA_ITEMS_MOST_RECENT => request_get_data_items_most_recent(middleware, message).await,
         REQUEST_GET_DATA_ITEMS_DATE_RANGE => request_get_data_items_by_range(middleware, message).await,
         REQUEST_GET_FUUIDS_VOLATILE => request_get_fuuids_volatile(middleware, message).await,
+        REQUEST_GET_FEED_DATA => request_feed_data(middleware, message).await,
         // Unknown request
         _ => Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown request"))?))
     }
@@ -524,4 +525,87 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 
     let response_message = RequestGetFuuidsVolatileResponse {ok: true, files};
     Ok(Some(middleware.build_reponse(response_message)?.0))
+}
+
+#[derive(Deserialize)]
+struct FeedDataRequest {
+    /// Feed identifier for the data to fetch
+    feed_id: String,
+    /// Batch start date - all considered records must be older than this date
+    #[serde(with="epochseconds")]
+    batch_start: DateTime<Utc>,
+    /// First record to fecth for batching
+    skip: Option<u64>,
+    /// Maximum number of records to fetch at once
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct FeedDataResponse {
+    ok: bool,
+    items: Vec<DataCollectorRow>,
+    keys: Option<MessageMilleGrillesOwned>,
+}
+
+async fn request_feed_data<M>(middleware: &M, mut message: MessageValide)
+                              -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if !message.certificat.verifier_roles_string(vec!["datasource_mapper".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
+    }
+    if !message.certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
+    }
+
+    let request: FeedDataRequest = {
+        let message_ref = message.message.parse()?;
+        message_ref.contenu()?.deserialize()?
+    };
+
+    let filtre = doc!{
+        "save_date": {"$lt": &request.batch_start},
+        "feed_id": &request.feed_id,
+    };
+    let limit = request.limit.unwrap_or(50);
+    let options = FindOptions::builder()
+        .limit(limit)
+        .skip(request.skip.unwrap_or(0))
+        .hint(Hint::Name("date_feed".into()))
+        // .sort(doc! {"save_date": 1})  // Implicit with index hint
+        .build();
+    let collection = middleware.get_collection_typed::<DataCollectorRow>(COLLECTION_NAME_SRC_DATAFILES)?;
+    let mut cursor = collection.find(filtre, options).await?;
+    
+    let mut key_ids = HashSet::with_capacity(5);
+    let mut rows = Vec::with_capacity(limit as usize);
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        // Extract key_ids
+        if let Some(cle_id) = row.encrypted_data.cle_id.as_ref() {
+            key_ids.insert(cle_id.to_owned());
+        }
+        if let Some(files) = row.files.as_ref() {
+            for file in files {
+                if let Some(decryption) = file.decryption.as_ref() {
+                    if let Some(cle_id) = decryption.cle_id.as_ref() {
+                        key_ids.insert(cle_id.to_owned());
+                    }
+                }
+            }
+        }
+        rows.push(row);
+    }
+
+    let mut response = FeedDataResponse {ok: true, items: rows, keys: None};
+    
+    if ! key_ids.is_empty() {
+        debug!("Fetch decryption keys");
+        let key_ids = key_ids.into_iter().collect::<Vec<String>>();
+        let client_certificate = message.certificat.chaine_pem()?;
+        let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
+        response.keys = Some(recrypted_keys);
+    }
+    
+    Ok(Some(middleware.build_reponse(response)?.0))
 }

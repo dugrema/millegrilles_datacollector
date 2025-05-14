@@ -12,6 +12,7 @@ pub const REQUEST_CHECK_EXISTING_DATA_IDS: &str = "checkExistingDataIds";
 pub const REQUEST_GET_DATA_ITEMS_MOST_RECENT: &str = "getDataItemsMostRecent";
 pub const REQUEST_GET_DATA_ITEMS_DATE_RANGE: &str = "getDataItemsDateRange";
 pub const REQUEST_GET_FUUIDS_VOLATILE: &str = "getFuuidsVolatile";
+pub const REQUEST_GET_FEED_DATA: &str = "getFeedData";
 
 pub const COMMAND_ADD_FUUIDS_VOLATILE: &str = "addFuuidsVolatile";
 

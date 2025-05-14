@@ -12,7 +12,7 @@ pub struct FileItem {
     pub fuuid: String,
     /// File decryption information
     #[serde(skip_serializing_if = "Option::is_none")]
-    decryption: Option<DechiffrageInterMillegrilleOwned>,
+    pub decryption: Option<DechiffrageInterMillegrilleOwned>,
 }
 
 #[derive(Serialize, Deserialize)]
