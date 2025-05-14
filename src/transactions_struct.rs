@@ -183,5 +183,14 @@ pub struct FileItemV2 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compression: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<std::string::String>,
+    pub nonce: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CreateFeedViewTransaction {
+    pub feed_id: String,
+    pub encrypted_data: EncryptedDocument,
+    pub active: bool,
+    pub decrypted: bool,
+    pub mapping_code: String,
 }

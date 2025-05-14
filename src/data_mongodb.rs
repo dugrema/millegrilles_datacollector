@@ -78,3 +78,18 @@ pub struct DataCollectorFilesRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attached_fuuids: Option<Vec<String>>,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedViewRow {
+    pub feed_view_id: String,
+    pub feed_id: String,
+    pub encrypted_data: EncryptedDocument,
+    pub name: Option<String>,
+    pub active: bool,
+    pub decrypted: bool,
+    pub mapping_code: String,
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub creation_date: DateTime<Utc>,
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub modification_date: DateTime<Utc>,
+}

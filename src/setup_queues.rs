@@ -41,6 +41,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
         TRANSACTION_CREATE_FEED,
         TRANSACTION_UPDATE_FEED,
         TRANSACTION_DELETE_FEED,
+        TRANSACTION_CREATE_FEED_VIEW,
     ];
     for cmd in commandes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L2Prive});

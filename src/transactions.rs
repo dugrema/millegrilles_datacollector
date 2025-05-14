@@ -11,9 +11,9 @@ use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::serde_json;
 
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow};
+use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewRow};
 use crate::domain_manager::DataCollectorDomainManager;
-use crate::transactions_struct::{CreateFeedTransaction, DeleteFeedTransaction, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction};
 
 pub async fn consume_transaction<M, T>(_gestionnaire: &DataCollectorDomainManager, middleware: &M, transaction: T, session: &mut ClientSession)
     -> Result<(), CommonError>
@@ -40,6 +40,7 @@ where
         TRANSACTION_DELETE_FEED => transaction_delete_feed(middleware, transaction, session).await,
         TRANSACTION_SAVE_DATA_ITEM => transaction_save_data_item(middleware, transaction, session).await,
         TRANSACTION_SAVE_DATA_ITEM_V2 => transaction_save_data_item_v2(middleware, transaction, session).await,
+        TRANSACTION_CREATE_FEED_VIEW => transaction_create_feed_view(middleware, transaction, session).await,
         _ => Err(format!("core_backup.aiguillage_transaction: Transaction {} est de type non gere : {}", transaction.transaction.id, action))?
     }
 }
@@ -196,6 +197,33 @@ where M: GenerateurMessages + MongoDao
 
     let collection = middleware.get_collection_typed::<DataCollectorFilesRow>(COLLECTION_NAME_SRC_DATAFILES)?;
     collection.insert_one_with_session(data_item, None, session).await?;
+
+    Ok(())
+}
+
+async fn transaction_create_feed_view<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession) -> Result<(), CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    let transaction_id = transaction.transaction.id.clone();
+    let estampille = transaction.transaction.estampille;
+    let transaction_create_feed_view: CreateFeedViewTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+
+    let now = Utc::now();
+
+    let data_row = FeedViewRow {
+        feed_view_id: transaction_id,
+        feed_id: transaction_create_feed_view.feed_id,
+        encrypted_data: transaction_create_feed_view.encrypted_data,
+        name: None,
+        active: transaction_create_feed_view.active,
+        decrypted: transaction_create_feed_view.decrypted,
+        mapping_code: transaction_create_feed_view.mapping_code,
+        creation_date: estampille,
+        modification_date: now,
+    };
+
+    let collection = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
+    collection.insert_one_with_session(data_row, None, session).await?;
 
     Ok(())
 }
