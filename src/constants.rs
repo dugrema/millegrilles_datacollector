@@ -1,5 +1,5 @@
 pub const DOMAIN_NAME: &str = "DataCollector";
-pub const DOMAIN_DATASOURCEMAPPER: &str = "datasourcemapper";
+pub const DOMAIN_DATASOURCEMAPPER: &str = "datasource_mapper";
 
 pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const COLLECTION_NAME_FEEDS: &str = "DataCollector/feeds";

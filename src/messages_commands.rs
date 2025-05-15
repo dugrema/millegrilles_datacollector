@@ -3,7 +3,7 @@ use log::{debug, error, warn};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
-use millegrilles_common_rust::common_messages::{verifier_reponse_ok, RequeteDechiffrageMessage};
+use millegrilles_common_rust::common_messages::{parse_confirmation_response, verifier_reponse_ok, RequeteDechiffrageMessage};
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, optionepochseconds, RoutageMessage};
@@ -542,6 +542,7 @@ struct ProcessViewRequest {
 
 #[derive(Serialize)]
 struct ProcessStartEvent {
+    feed_id: String,
     feed_view_id: String,
 }
 
@@ -605,13 +606,27 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     collection_feed_view.update_one_with_session(filtre_view, ops, None, session).await?;
 
     // Emit command to request start of processing of this feed view.
-    let process_event = ProcessStartEvent {feed_view_id: feed_view.feed_id.to_owned()};
-    let routage = RoutageMessageAction::builder(DOMAIN_DATASOURCEMAPPER, "processFeedView", vec![Securite::L3Protege]).build();
+    let process_event = ProcessStartEvent {
+        feed_id: feed_view.feed_id.to_owned(),
+        feed_view_id: feed_view.feed_view_id.to_owned()
+    };
+    let routage = RoutageMessageAction::builder(DOMAIN_DATASOURCEMAPPER, "processFeedView", vec![Securite::L3Protege])
+        .timeout_blocking(5_000)
+        .build();
     match middleware.transmettre_commande(routage, process_event).await? {
         Some(message) => {
-            if ! verifier_reponse_ok(&message) {
-                error!("command_process_view Error starting feed processing: {:?}", message);
-                return Ok(Some(middleware.reponse_err(Some(500), None, Some("Error in response"))?));
+            match parse_confirmation_response(&message) {
+                Some(confirmation) => {
+                    if Some(true) != confirmation.ok {
+                        error!("command_process_view Error starting feed processing: {:?}", message);
+                        let err = match confirmation.err.as_ref() { Some(inner) => Some(inner.as_str()), None => None};
+                        return Ok(Some(middleware.reponse_err(confirmation.code, None, err)?));
+                    }
+                }
+                None => {
+                    error!("command_process_view Error starting feed processing: {:?}", message);
+                    return Ok(Some(middleware.reponse_err(Some(500), None, Some("Error in response"))?))
+                }
             }
         },
         None => {

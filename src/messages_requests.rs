@@ -6,7 +6,7 @@ use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::ResponseRequestDechiffrageV2Cle;
-use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE, SECURITE_1_PUBLIC, SECURITE_2_PRIVE};
+use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE, SECURITE_1_PUBLIC, SECURITE_2_PRIVE, SECURITE_3_PROTEGE};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned};
 use millegrilles_common_rust::mongo_dao::{start_transaction_regular, MongoDao};
@@ -668,18 +668,9 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         message_ref.contenu()?.deserialize()?
     };
 
-    let user_id = match message.certificat.get_user_id() {
-        Ok(inner) => match inner {
-            Some(user) => user.to_owned(),
-            None => {
-                error!("command_create_feed Invalid certificate, no user_id - command rejected");
-                return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
-            }
-        },
-        Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
-    };
-
     let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+    let is_datasource_mapper = message.certificat.verifier_roles_string(vec!["datasource_mapper".to_string()])?;
+    let is_protected = message.certificat.verifier_exchanges(vec![Securite::L3Protege])?;
 
     let feed_filtre = {
         let request: FeedViewsRequest = {
@@ -687,15 +678,30 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
             message_ref.contenu()?.deserialize()?
         };
 
-        let mut filtre = if is_admin {
-            doc! {"feed_id": &request.feed_id, "user_id": null, "deleted": false}  // Only fetch system feeds
+        let mut filtre = if is_datasource_mapper && is_protected {
+            doc! {"feed_id": &request.feed_id, "deleted": false}  // Fetch any feed that is not deleted
         } else {
-            // Regular private user, only load user feeds and private system feeds.
-            doc!(
-                "feed_id": &request.feed_id,
-                "user_id": &user_id,
-                "deleted": false
-            )
+            let user_id = match message.certificat.get_user_id() {
+                Ok(inner) => match inner {
+                    Some(user) => user.to_owned(),
+                    None => {
+                        error!("command_create_feed Invalid certificate, no user_id - command rejected");
+                        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
+                    }
+                },
+                Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
+            };
+
+            if is_admin {
+                doc! {"feed_id": &request.feed_id, "user_id": null, "deleted": false}  // Only fetch system feeds
+            } else {
+                // Regular private user, only load user feeds and private system feeds.
+                doc!(
+                    "feed_id": &request.feed_id,
+                    "user_id": &user_id,
+                    "deleted": false
+                )
+            }
         };
 
         filtre
