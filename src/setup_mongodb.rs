@@ -107,5 +107,21 @@ where M: MongoDao + ConfigMessages
         Some(options_feedview_data_id)
     ).await?;
 
+    let options_feedview_pubdatedescgroup_id = IndexOptions {
+        nom_index: Some(String::from("pubdate_desc_group")),
+        unique: false,
+    };
+    let champs_feedview_pubdatedescgroup_id = vec!(
+        ChampIndex {nom_champ: String::from("pub_date"), direction: -1},
+        ChampIndex {nom_champ: String::from("group_id"), direction: 1},
+        ChampIndex {nom_champ: String::from("feed_view_id"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        COLLECTION_NAME_FEED_VIEW_DATA,
+        champs_feedview_pubdatedescgroup_id,
+        Some(options_feedview_pubdatedescgroup_id)
+    ).await?;
+
     Ok(())
 }

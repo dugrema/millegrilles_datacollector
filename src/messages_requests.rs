@@ -17,13 +17,13 @@ use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::{CountOptions, FindOptions, Hint};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds, epochmilliseconds, optionepochmilliseconds};
-
+use millegrilles_common_rust::millegrilles_cryptographie::x509::EnveloppeCertificat;
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewRow};
+use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewDataRow, FeedViewRow};
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::keymaster::{fetch_decryption_keys, get_decrypted_keys, get_encrypted_keys};
 use crate::messages_commands::FuuidVolatile;
-use crate::transactions_struct::{CreateFeedTransaction, FileItem};
+use crate::transactions_struct::{CreateFeedTransaction, FeedViewDataItem, FileItem};
 
 pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
@@ -63,6 +63,7 @@ pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager
         REQUEST_GET_DATA_ITEMS_DATE_RANGE => request_get_data_items_by_range(middleware, message).await,
         REQUEST_GET_FUUIDS_VOLATILE => request_get_fuuids_volatile(middleware, message).await,
         REQUEST_GET_FEED_DATA => request_feed_data(middleware, message).await,
+        REQUEST_GET_VIEW_DATA => request_view_data(middleware, message).await,
         // Unknown request
         _ => Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown request"))?))
     }
@@ -400,40 +401,43 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         message_ref.contenu()?.deserialize()?
     };
 
-    {
-        let user_id = match message.certificat.get_user_id() {
-            Ok(inner) => match inner {
-                Some(user) => user.to_owned(),
-                None => {
-                    error!("request_get_data_items_by_range Invalid certificate, no user_id - command rejected");
-                    return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
-                }
-            },
-            Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
-        };
+    // Throws Err if unauthorized
+    verify_authorized_feed(middleware, request.feed_id.as_str(), message.certificat.as_ref()).await?;
 
-        let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
-        let filtre = if is_admin {
-            doc! {"user_id": null, "feed_id": &request.feed_id, "deleted": false}
-        } else {
-            // Regular private user, only load user feeds.
-            doc!(
-                "$or": [
-                    {"user_id": user_id},
-                    {"user_id": null, "security_level": {"$in": [SECURITE_1_PUBLIC, SECURITE_2_PRIVE]}},
-                ],
-                "feed_id": &request.feed_id,
-                "deleted": false
-            )
-        };
-        let collection_feeds = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
-        let _feed = match collection_feeds.find_one(filtre, None).await? {
-            Some(feed) => feed,
-            None => {
-                return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
-            }
-        };
-    }
+    // {
+    //     let user_id = match message.certificat.get_user_id() {
+    //         Ok(inner) => match inner {
+    //             Some(user) => user.to_owned(),
+    //             None => {
+    //                 error!("request_get_data_items_by_range Invalid certificate, no user_id - command rejected");
+    //                 return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
+    //             }
+    //         },
+    //         Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
+    //     };
+    //
+    //     let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+    //     let filtre = if is_admin {
+    //         doc! {"user_id": null, "feed_id": &request.feed_id, "deleted": false}
+    //     } else {
+    //         // Regular private user, only load user feeds.
+    //         doc!(
+    //             "$or": [
+    //                 {"user_id": user_id},
+    //                 {"user_id": null, "security_level": {"$in": [SECURITE_1_PUBLIC, SECURITE_2_PRIVE]}},
+    //             ],
+    //             "feed_id": &request.feed_id,
+    //             "deleted": false
+    //         )
+    //     };
+    //     let collection_feeds = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    //     let _feed = match collection_feeds.find_one(filtre, None).await? {
+    //         Some(feed) => feed,
+    //         None => {
+    //             return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
+    //         }
+    //     };
+    // }
 
     let (start_date, end_date) = match (request.start_date, request.end_date) {
         (Some(start_date), Some(end_date)) => (start_date, end_date),
@@ -688,55 +692,8 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         message_ref.contenu()?.deserialize()?
     };
 
-    let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
-    let is_datasource_mapper = message.certificat.verifier_roles_string(vec!["datasource_mapper".to_string()])?;
-    let is_protected = message.certificat.verifier_exchanges(vec![Securite::L3Protege])?;
-
-    let feed_filtre = {
-        let request: FeedViewsRequest = {
-            let message_ref = message.message.parse()?;
-            message_ref.contenu()?.deserialize()?
-        };
-
-        let mut filtre = if is_datasource_mapper && is_protected {
-            doc! {"feed_id": &request.feed_id, "deleted": false}  // Fetch any feed that is not deleted
-        } else {
-            let user_id = match message.certificat.get_user_id() {
-                Ok(inner) => match inner {
-                    Some(user) => user.to_owned(),
-                    None => {
-                        error!("command_create_feed Invalid certificate, no user_id - command rejected");
-                        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
-                    }
-                },
-                Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
-            };
-
-            if is_admin {
-                doc! {"feed_id": &request.feed_id, "user_id": null, "deleted": false}  // Only fetch system feeds
-            } else {
-                // Regular private user, only load user feeds and private system feeds.
-                doc!(
-                    "feed_id": &request.feed_id,
-                    "user_id": &user_id,
-                    "deleted": false
-                )
-            }
-        };
-
-        filtre
-    };
-
-    let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
-    let feed = collection.find_one(feed_filtre, None).await?;
-
-    let feed = match feed {
-        Some(feed) => feed,
-        None => {
-            error!("request_get_feed_views Feed not found or access denied");
-            return Ok(Some(middleware.reponse_err(Some(404), None, Some("Feed not found"))?));
-        }
-    };
+    // Throws Err if unauthorized
+    let feed = verify_authorized_feed(middleware, request.feed_id.as_str(), message.certificat.as_ref()).await?;
 
     let mut key_ids = HashSet::with_capacity(50);
     if let Some(cle_id) = feed.encrypted_feed_information.cle_id.as_ref() {
@@ -764,4 +721,124 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     response_message.keys = fetch_decryption_keys(middleware, &message, key_ids).await?;
 
     Ok(Some(middleware.build_reponse_chiffree(response_message, message.certificat.as_ref())?.0))
+}
+
+#[derive(Deserialize)]
+struct FeedViewDataRequest {
+    feed_view_id: String,
+    skip: Option<u64>,
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct FeedViewDataResponse {
+    ok: bool,
+    feed: FeedResponse,
+    feed_view: FeedViewResponse,
+    items: Vec<FeedViewDataItem>,
+    keys: Option<MessageMilleGrillesOwned>,
+}
+
+async fn request_view_data<M>(middleware: &M, mut message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    let request: FeedViewDataRequest = {
+        let message_ref = message.message.parse()?;
+        message_ref.contenu()?.deserialize()?
+    };
+
+    let filtre_view = doc!{"feed_view_id": &request.feed_view_id, "deleted": false};
+    let collection_views = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
+    let feed_view = match collection_views.find_one(filtre_view, None).await? {
+        Some(view) => view,
+        None => return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed view"))?))
+    };
+
+    // Throws Err if unauthorized
+    let feed = verify_authorized_feed(middleware, feed_view.feed_id.as_str(), message.certificat.as_ref()).await?;
+
+    let limit = request.limit.unwrap_or(50);
+    let mut key_ids = HashSet::with_capacity(limit as usize * 2);
+    if let Some(cle_id) = feed.encrypted_feed_information.cle_id.as_ref() {
+        key_ids.insert(cle_id.to_owned());
+    }
+    if let Some(cle_id) = feed_view.encrypted_data.cle_id.as_ref() {
+        key_ids.insert(cle_id.to_owned());
+    }
+
+    // Fetch data items
+    let skip = request.skip.unwrap_or(0);
+    let data_filtre = doc!{"feed_view_id": &request.feed_view_id};
+    let collection = middleware.get_collection_typed::<FeedViewDataRow>(COLLECTION_NAME_FEED_VIEW_DATA)?;
+    let options = FindOptions::builder().limit(limit).skip(skip).hint(Hint::Name("pubdate_desc_group".to_string())).build();
+    let mut cursor = collection.find(data_filtre, options).await?;
+    let mut items: Vec<FeedViewDataItem> = Vec::with_capacity(limit as usize);
+
+    // Extract all key_ids
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        if let Some(cle_id) = row.encrypted_data.cle_id.as_ref() {
+            key_ids.insert(cle_id.to_owned());
+        }
+        if let Some(files) = row.files.as_ref() {
+            for file in files {
+                if let Some(decryption) = file.decryption.as_ref() {
+                    if let Some(cle_id) = decryption.cle_id.as_ref() {
+                        key_ids.insert(cle_id.to_owned());
+                    }
+                }
+            }
+        }
+        items.push(row.into());
+    }
+    let mut response_message = FeedViewDataResponse {ok: true, feed: feed.into(), feed_view: feed_view.into(), items, keys: None};
+
+    if key_ids.len() > 0 {
+        response_message.keys = fetch_decryption_keys(middleware, &message, key_ids).await?;
+    }
+
+    Ok(Some(middleware.build_reponse_chiffree(response_message, message.certificat.as_ref())?.0))
+}
+
+async fn verify_authorized_feed<M>(middleware: &M, feed_id: &str, certificat: &EnveloppeCertificat) -> Result<DataFeedRow, CommonError>
+    where M: MongoDao
+{
+    let is_admin = certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+    let is_datasource_mapper = certificat.verifier_roles_string(vec!["datasource_mapper".to_string()])?;
+    let is_protected = certificat.verifier_exchanges(vec![Securite::L3Protege])?;
+
+    let feed_filtre = if is_datasource_mapper && is_protected {
+        doc! {"feed_id": feed_id, "deleted": false}  // Fetch any feed that is not deleted
+    } else {
+        let user_id = match certificat.get_user_id() {
+            Ok(inner) => match inner {
+                Some(user) => user.to_owned(),
+                None => {
+                    error!("command_create_feed Invalid certificate, no user_id - command rejected");
+                    Err(CommonError::ErrorResponse(Some(401), None, Some("Invalid certificate".to_string())))?
+                }
+            },
+            Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
+        };
+
+        if is_admin {
+            doc! {"feed_id": feed_id, "user_id": null, "deleted": false}  // Only fetch system feeds
+        } else {
+            // Regular private user, only load user feeds and private system feeds.
+            doc!(
+                "feed_id": feed_id,
+                "user_id": &user_id,
+                "deleted": false
+            )
+        }
+    };
+
+    let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+
+    match collection.find_one(feed_filtre, None).await? {
+        Some(feed) => Ok(feed),
+        None => Err(CommonError::ErrorResponse(Some(404), None, Some("Feed not found / access refused".to_string())))?
+    }
+
 }

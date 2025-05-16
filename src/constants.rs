@@ -17,6 +17,7 @@ pub const REQUEST_GET_DATA_ITEMS_MOST_RECENT: &str = "getDataItemsMostRecent";
 pub const REQUEST_GET_DATA_ITEMS_DATE_RANGE: &str = "getDataItemsDateRange";
 pub const REQUEST_GET_FUUIDS_VOLATILE: &str = "getFuuidsVolatile";
 pub const REQUEST_GET_FEED_DATA: &str = "getFeedData";
+pub const REQUEST_GET_VIEW_DATA: &str = "getFeedViewData";
 
 pub const COMMAND_ADD_FUUIDS_VOLATILE: &str = "addFuuidsVolatile";
 pub const COMMAND_PROCESS_VIEW: &str = "processView";

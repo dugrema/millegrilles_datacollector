@@ -126,3 +126,17 @@ impl From<FeedViewDataItem> for FeedViewDataRow {
         }
     }
 }
+
+impl Into<FeedViewDataItem> for FeedViewDataRow {
+    fn into(self) -> FeedViewDataItem {
+        FeedViewDataItem {
+            data_id: self.data_id,
+            feed_view_id: self.feed_view_id,
+            feed_id: self.feed_id,
+            pub_date: self.pub_date,
+            encrypted_data: self.encrypted_data,
+            group_id: self.group_id,
+            files: self.files,
+        }
+    }
+}

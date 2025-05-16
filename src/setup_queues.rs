@@ -24,6 +24,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
         REQUEST_GET_FEED_VIEWS,
         REQUEST_GET_DATA_ITEMS_MOST_RECENT,
         REQUEST_GET_DATA_ITEMS_DATE_RANGE,
+        REQUEST_GET_VIEW_DATA,
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L2Prive});
