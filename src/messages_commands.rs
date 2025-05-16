@@ -302,6 +302,11 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
+#[derive(Serialize)]
+struct DataFeedUpdatedEvent {
+    feed_id: String,
+}
+
 async fn command_save_data_item_v2<M>(middleware: &M, mut message: MessageValide, manager: &DataCollectorDomainManager, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: GenerateurMessages + MongoDao + ValidateurX509
@@ -314,6 +319,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 
     let mut message_owned = message.message.parse_to_owned()?;
     let transaction: SaveDataItemTransactionV2 = message_owned.deserialize()?;
+    let feed_id = transaction.feed_id.clone();
 
     // Collect all fuuids, including for the data file and attached files.
     let mut fuuids_to_claim = vec![transaction.data_fuuid.clone()];
@@ -358,6 +364,9 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     // Emit file claims
     debug!("command_save_data_item Claiming fuuids {:?}", fuuids_to_claim);
     claim_and_visit_files(middleware, fuuids_to_claim).await?;
+
+    let routage = RoutageMessageAction::builder(DOMAIN_NAME, "feedDataUpdated", vec![Securite::L3Protege]).build();
+    middleware.emettre_evenement(routage, DataFeedUpdatedEvent {feed_id} ).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
@@ -695,7 +704,7 @@ async fn command_insert_feed_view_data<M>(middleware: &M, mut message: MessageVa
     
     if let Some(true) = command.deduplicate {
         for item in batch {
-            let filtre = doc! {"data_id": &item.data_id};
+            let filtre = doc! {"data_id": &item.data_id, "feed_view_id": &item.feed_view_id};
             let item = convertir_to_bson(item)?;
             let ops = doc! {"$setOnInsert": item};
             let options = UpdateOptions::builder().upsert(true).build();
@@ -706,7 +715,7 @@ async fn command_insert_feed_view_data<M>(middleware: &M, mut message: MessageVa
             if verifier_erreur_duplication_mongo(&e.kind) {
                 // Duplicate found. Insert missing items.
                 for item in batch {
-                    let filtre = doc!{"data_id": &item.data_id};
+                    let filtre = doc!{"data_id": &item.data_id, "feed_view_id": &item.feed_view_id};
                     let item = convertir_to_bson(item)?;
                     let ops = doc!{"$setOnInsert": item};
                     let options = UpdateOptions::builder().upsert(true).build();

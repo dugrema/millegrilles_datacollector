@@ -639,7 +639,8 @@ async fn request_feed_data<M>(middleware: &M, mut message: MessageValide)
 #[derive(Deserialize)]
 struct FeedViewsRequest {
     feed_id: String,
-    feed_view_id: Option<String>,
+    feed_view_ids: Option<Vec<String>>,
+    active_only: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -701,8 +702,11 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     }
 
     let mut views_filtre = doc!{"feed_id": &request.feed_id, "deleted": false};
-    if let Some(feed_view_id) = request.feed_view_id {
-        views_filtre.insert("feed_view_id", feed_view_id);
+    if let Some(feed_view_ids) = request.feed_view_ids {
+        views_filtre.insert("feed_view_id", doc!{"$in": feed_view_ids});
+    }
+    if let Some(true) = request.active_only {
+        views_filtre.insert("active", true);
     }
 
     let collection = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
