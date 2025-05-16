@@ -692,28 +692,31 @@ async fn command_insert_feed_view_data<M>(middleware: &M, mut message: MessageVa
     for item in command.data {
         batch.push(item.into());
     }
-    for item in batch {
-        let filtre = doc!{"data_id": &item.data_id};
-        let item = convertir_to_bson(item)?;
-        let ops = doc!{"$setOnInsert": item};
-        let options = UpdateOptions::builder().upsert(true).build();
-        collection_feed_view_data.update_one(filtre, ops, options).await?;
-    }
     
-    // if let Err(e) = collection_feed_view_data.insert_many(&batch, None).await {
-    //     if verifier_erreur_duplication_mongo(&e.kind) {
-    //         // Duplicate found. Insert missing items.
-    //         for item in batch {
-    //             let filtre = doc!{"data_id": &item.data_id};
-    //             let item = convertir_to_bson(item)?;
-    //             let ops = doc!{"$setOnInsert": item};
-    //             let options = UpdateOptions::builder().upsert(true).build();
-    //             collection_feed_view_data.update_one(filtre, ops, options).await?;
-    //         }
-    //     } else {
-    //         Err(e)?  // Re-throw
-    //     }
-    // }
+    if let Some(true) = command.deduplicate {
+        for item in batch {
+            let filtre = doc! {"data_id": &item.data_id};
+            let item = convertir_to_bson(item)?;
+            let ops = doc! {"$setOnInsert": item};
+            let options = UpdateOptions::builder().upsert(true).build();
+            collection_feed_view_data.update_one(filtre, ops, options).await?;
+        }
+    } else {
+        if let Err(e) = collection_feed_view_data.insert_many(&batch, None).await {
+            if verifier_erreur_duplication_mongo(&e.kind) {
+                // Duplicate found. Insert missing items.
+                for item in batch {
+                    let filtre = doc!{"data_id": &item.data_id};
+                    let item = convertir_to_bson(item)?;
+                    let ops = doc!{"$setOnInsert": item};
+                    let options = UpdateOptions::builder().upsert(true).build();
+                    collection_feed_view_data.update_one(filtre, ops, options).await?;
+                }
+            } else {
+                Err(e)?  // Re-throw
+            }
+        }
+    }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }

@@ -98,6 +98,7 @@ where M: MongoDao + ConfigMessages
     };
     let champs_feedview_data_id = vec!(
         ChampIndex {nom_champ: String::from("data_id"), direction: 1},
+        ChampIndex {nom_champ: String::from("feed_view_id"), direction: 1},
     );
     middleware.create_index(
         middleware,
@@ -105,6 +106,6 @@ where M: MongoDao + ConfigMessages
         champs_feedview_data_id,
         Some(options_feedview_data_id)
     ).await?;
-    
+
     Ok(())
 }
