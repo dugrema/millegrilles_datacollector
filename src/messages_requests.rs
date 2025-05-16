@@ -735,6 +735,7 @@ struct FeedViewDataResponse {
     ok: bool,
     feed: FeedResponse,
     feed_view: FeedViewResponse,
+    estimated_count: u64,
     items: Vec<FeedViewDataItem>,
     keys: Option<MessageMilleGrillesOwned>,
 }
@@ -771,6 +772,9 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     let skip = request.skip.unwrap_or(0);
     let data_filtre = doc!{"feed_view_id": &request.feed_view_id};
     let collection = middleware.get_collection_typed::<FeedViewDataRow>(COLLECTION_NAME_FEED_VIEW_DATA)?;
+    // Count items (for pagination)
+    let options = CountOptions::builder().limit(1000).hint(Hint::Name("pubdate_desc_group".to_string())).build();
+    let count = collection.count_documents(data_filtre.clone(), None).await?;
     let options = FindOptions::builder().limit(limit).skip(skip).hint(Hint::Name("pubdate_desc_group".to_string())).build();
     let mut cursor = collection.find(data_filtre, options).await?;
     let mut items: Vec<FeedViewDataItem> = Vec::with_capacity(limit as usize);
@@ -792,7 +796,8 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         }
         items.push(row.into());
     }
-    let mut response_message = FeedViewDataResponse {ok: true, feed: feed.into(), feed_view: feed_view.into(), items, keys: None};
+    let mut response_message = FeedViewDataResponse {
+        ok: true, feed: feed.into(), feed_view: feed_view.into(), estimated_count: count, items, keys: None};
 
     if key_ids.len() > 0 {
         response_message.keys = fetch_decryption_keys(middleware, &message, key_ids).await?;
