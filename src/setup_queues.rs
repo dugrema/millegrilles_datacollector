@@ -9,12 +9,12 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // RK 1.public
-    let requetes_privees: Vec<&str> = vec![
+    let requetes_publiques: Vec<&str> = vec![
         REQUEST_GET_FEEDS_FOR_SCRAPER,
         REQUEST_CHECK_EXISTING_DATA_IDS,
         REQUEST_GET_FUUIDS_VOLATILE,
     ];
-    for req in requetes_privees {
+    for req in requetes_publiques {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L1Public});
     }
 
@@ -27,6 +27,14 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L2Prive});
+    }
+
+    // RK 2.prive
+    let requetes_protegees: Vec<&str> = vec![
+        REQUEST_GET_FEED_DATA,
+    ];
+    for req in requetes_protegees {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L3Protege});
     }
 
     let commands_public: Vec<&str> = vec![
@@ -48,6 +56,13 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
     ];
     for cmd in commandes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L2Prive});
+    }
+
+    let commandes_protegees: Vec<&str> = vec![
+        COMMAND_INSERT_VIEW_DATA,
+    ];
+    for cmd in commandes_protegees {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, cmd), exchange: Securite::L3Protege});
     }
 
     let mut queues = Vec::new();

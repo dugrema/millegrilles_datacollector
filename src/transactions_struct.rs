@@ -206,3 +206,21 @@ pub struct UpdateFeedViewTransaction {
     pub decrypted: bool,
     pub mapping_code: String,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedViewDataItem {
+    /// Unique data item identifier for this feed view
+    pub data_id: String,
+    pub feed_view_id: String,
+    /// Source data of the data item
+    pub feed_id: String,
+    /// Item publication or content date
+    #[serde(with="optionepochmilliseconds")]
+    pub pub_date: Option<DateTime<Utc>>,
+    /// Encrypted content of the data item. Structure depends on the feed type.
+    pub encrypted_data: EncryptedDocument,
+    pub group_id: Option<String>,
+    /// Files associated with this data item
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<FileItem>>,
+}

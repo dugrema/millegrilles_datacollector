@@ -5,6 +5,7 @@ pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const COLLECTION_NAME_FEEDS: &str = "DataCollector/feeds";
 pub const COLLECTION_NAME_FEED_VIEWS: &str = "DataCollector/feeds/views";
 pub const COLLECTION_NAME_DATA_DATACOLLECTOR: &str = "DataCollector/data/DataCollector";
+pub const COLLECTION_NAME_FEED_VIEW_DATA: &str = "DataCollector/view/Data";
 pub const COLLECTION_NAME_SRC_DATAFILES: &str = "DataCollector/source/DataFiles";
 pub const COLLECTION_NAME_SRC_FILES_VOLATILE: &str = "DataCollector/volatile/files";
 
@@ -19,6 +20,7 @@ pub const REQUEST_GET_FEED_DATA: &str = "getFeedData";
 
 pub const COMMAND_ADD_FUUIDS_VOLATILE: &str = "addFuuidsVolatile";
 pub const COMMAND_PROCESS_VIEW: &str = "processView";
+pub const COMMAND_INSERT_VIEW_DATA: &str = "insertViewData";
 
 
 pub const TRANSACTION_CREATE_FEED: &str = "createFeed";

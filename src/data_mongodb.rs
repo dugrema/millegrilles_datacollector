@@ -4,7 +4,7 @@ use millegrilles_common_rust::bson;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
-use crate::transactions_struct::FileItem;
+use crate::transactions_struct::{FeedViewDataItem, FileItem};
 
 #[derive(Serialize, Deserialize)]
 pub struct DataFeedRow {
@@ -94,4 +94,35 @@ pub struct FeedViewRow {
     pub modification_date: DateTime<Utc>,
     pub deleted: bool,
     pub ready: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FeedViewDataRow {
+    /// Unique data item identifier for this feed view
+    pub data_id: String,
+    pub feed_view_id: String,
+    /// Source data of the data item
+    pub feed_id: String,
+    /// Item publication or content date
+    #[serde(default, with="opt_chrono_datetime_as_bson_datetime", skip_serializing_if = "Option::is_none")]
+    pub pub_date: Option<DateTime<Utc>>,
+    /// Encrypted content of the data item. Structure depends on the feed type.
+    pub encrypted_data: EncryptedDocument,
+    pub group_id: Option<String>,
+    /// Files associated with this data item
+    pub files: Option<Vec<FileItem>>,
+}
+
+impl From<FeedViewDataItem> for FeedViewDataRow {
+    fn from(value: FeedViewDataItem) -> Self {
+        Self {
+            data_id: value.data_id,
+            feed_view_id: value.feed_view_id,
+            feed_id: value.feed_id,
+            pub_date: value.pub_date,
+            encrypted_data: value.encrypted_data,
+            group_id: value.group_id,
+            files: value.files,
+        }
+    }
 }

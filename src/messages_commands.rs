@@ -7,7 +7,7 @@ use millegrilles_common_rust::common_messages::{parse_confirmation_response, ver
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, optionepochseconds, RoutageMessage};
-use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, start_transaction_regular, MongoDao};
+use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, start_transaction_regular, verifier_erreur_duplication_mongo, MongoDao};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
@@ -19,10 +19,10 @@ use millegrilles_common_rust::{chrono, serde_json};
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow, FeedViewRow};
+use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow, FeedViewDataRow, FeedViewRow};
 use crate::file_maintenance::{claim_and_visit_files, claim_files};
 use crate::keymaster::{fetch_decryption_keys, transmit_attached_key};
-use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, FileItem, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction, UpdateFeedViewTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, FeedViewDataItem, FileItem, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction, UpdateFeedViewTransaction};
 
 pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
@@ -70,6 +70,7 @@ pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager:
         TRANSACTION_UPDATE_FEED_VIEW => command_update_feed_view(middleware, message, manager, &mut session).await,
         COMMAND_ADD_FUUIDS_VOLATILE => command_add_fuuids_volatile(middleware, message).await,
         COMMAND_PROCESS_VIEW => command_process_view(middleware, message, &mut session).await,
+        COMMAND_INSERT_VIEW_DATA => command_insert_feed_view_data(middleware, message, &mut session).await,
         // Unknown command
         _ => {
             Ok(Some(middleware.reponse_err(Some(99), None, Some("Unknown command"))?))
@@ -634,6 +635,85 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
             return Ok(Some(middleware.reponse_err(Some(500), None, Some("No response when starting process"))?));
         }
     }
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+#[derive(Deserialize)]
+struct InsertFeedViewDataRequest {
+    feed_view_id: String,
+    feed_id: String,
+    data: Vec<FeedViewDataItem>,
+    truncate: Option<bool>,
+    deduplicate: Option<bool>,
+}
+
+async fn command_insert_feed_view_data<M>(middleware: &M, mut message: MessageValide, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    // Access check
+    if !message.certificat.verifier_roles_string(vec!["datasource_mapper".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
+    }
+    if !message.certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
+    }
+
+    let command: InsertFeedViewDataRequest = {
+        let message_ref = message.message.parse()?;
+        message_ref.contenu()?.deserialize()?
+    };
+
+    // Check feed (must not be deleted)
+    let filtre_feed = doc!{"feed_id": &command.feed_id, "deleted": false};
+    let collection_feeds = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    if collection_feeds.find_one(filtre_feed, None).await?.is_none() {
+        error!("command_insert_feed_view_data Unknown feed_id");
+        return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed_id"))?));
+    };
+
+    // Check feed view (must not be deleted)
+    let filtre_feed_view = doc!{"feed_view_id": &command.feed_view_id, "deleted": false};
+    let collection_feed_views = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
+    if collection_feed_views.find_one(filtre_feed_view, None).await?.is_none() {
+        error!("command_insert_feed_view_data Unknown feed_view_id");
+        return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed_view_id"))?));
+    };
+
+    let collection_feed_view_data = middleware.get_collection_typed::<FeedViewDataRow>(COLLECTION_NAME_FEED_VIEW_DATA)?;
+    if Some(true) == command.truncate {
+        let delete_filtre = doc!{"feed_id": &command.feed_id, "feed_view_id": &command.feed_view_id};
+        collection_feed_view_data.delete_many(delete_filtre, None).await?;
+    }
+
+    // Convert all items into FeedViewDataRow type
+    let mut batch: Vec<FeedViewDataRow> = Vec::with_capacity(command.data.len());
+    for item in command.data {
+        batch.push(item.into());
+    }
+    for item in batch {
+        let filtre = doc!{"data_id": &item.data_id};
+        let item = convertir_to_bson(item)?;
+        let ops = doc!{"$setOnInsert": item};
+        let options = UpdateOptions::builder().upsert(true).build();
+        collection_feed_view_data.update_one(filtre, ops, options).await?;
+    }
+    
+    // if let Err(e) = collection_feed_view_data.insert_many(&batch, None).await {
+    //     if verifier_erreur_duplication_mongo(&e.kind) {
+    //         // Duplicate found. Insert missing items.
+    //         for item in batch {
+    //             let filtre = doc!{"data_id": &item.data_id};
+    //             let item = convertir_to_bson(item)?;
+    //             let ops = doc!{"$setOnInsert": item};
+    //             let options = UpdateOptions::builder().upsert(true).build();
+    //             collection_feed_view_data.update_one(filtre, ops, options).await?;
+    //         }
+    //     } else {
+    //         Err(e)?  // Re-throw
+    //     }
+    // }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }

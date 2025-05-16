@@ -1,7 +1,7 @@
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
-use crate::constants::{COLLECTION_NAME_DATA_DATACOLLECTOR, COLLECTION_NAME_FEEDS, COLLECTION_NAME_FEED_VIEWS, COLLECTION_NAME_SRC_DATAFILES, COLLECTION_NAME_SRC_FILES_VOLATILE};
+use crate::constants::{COLLECTION_NAME_DATA_DATACOLLECTOR, COLLECTION_NAME_FEEDS, COLLECTION_NAME_FEED_VIEWS, COLLECTION_NAME_FEED_VIEW_DATA, COLLECTION_NAME_SRC_DATAFILES, COLLECTION_NAME_SRC_FILES_VOLATILE};
 
 pub async fn prepare_mongodb_index<M>(middleware: &M) -> Result<(), CommonError>
 where M: MongoDao + ConfigMessages
@@ -90,6 +90,20 @@ where M: MongoDao + ConfigMessages
         COLLECTION_NAME_FEED_VIEWS,
         champs_feedview_id,
         Some(options_feedview_id)
+    ).await?;
+
+    let options_feedview_data_id = IndexOptions {
+        nom_index: Some(String::from("data_id_uniq")),
+        unique: true,
+    };
+    let champs_feedview_data_id = vec!(
+        ChampIndex {nom_champ: String::from("data_id"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        COLLECTION_NAME_FEED_VIEW_DATA,
+        champs_feedview_data_id,
+        Some(options_feedview_data_id)
     ).await?;
     
     Ok(())

@@ -16,10 +16,10 @@ use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::Encryp
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::{CountOptions, FindOptions, Hint};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds, epochmilliseconds, optionepochmilliseconds};
 
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewRow};
+use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewRow};
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::keymaster::{fetch_decryption_keys, get_decrypted_keys, get_encrypted_keys};
 use crate::messages_commands::FuuidVolatile;
@@ -532,8 +532,8 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 struct FeedDataRequest {
     /// Feed identifier for the data to fetch
     feed_id: String,
-    /// Batch start date - all considered records must be older than this date
-    #[serde(with="epochseconds")]
+    /// Batch start date - all considered records must be newer than this date
+    #[serde(with="epochmilliseconds")]
     batch_start: DateTime<Utc>,
     /// First record to fecth for batching
     skip: Option<u64>,
@@ -541,16 +541,53 @@ struct FeedDataRequest {
     limit: Option<i64>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct DataCollectorFilesResponse {
+    /// Unique data item identifier for this feed
+    pub data_id: String,
+    /// Source of the data item
+    pub feed_id: String,
+    /// Item publication or content date
+    #[serde(with="epochmilliseconds")]
+    pub save_date: DateTime<Utc>,
+    pub data_fuuid: String,
+    pub key_ids: Vec<String>,
+    /// Item publication or content date
+    #[serde(default, with="optionepochmilliseconds", skip_serializing_if = "Option::is_none")]
+    pub pub_date_start: Option<DateTime<Utc>>,
+    /// Item publication or content date
+    #[serde(default, with="optionepochmilliseconds", skip_serializing_if = "Option::is_none")]
+    pub pub_date_end: Option<DateTime<Utc>>,
+    /// Files associated with this data item
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_fuuids: Option<Vec<String>>,
+}
+
+impl From<DataCollectorFilesRow> for DataCollectorFilesResponse {
+    fn from(value: DataCollectorFilesRow) -> Self {
+        Self {
+            data_id: value.data_id,
+            feed_id: value.feed_id,
+            save_date: value.save_date,
+            data_fuuid: value.data_fuuid,
+            key_ids: value.key_ids,
+            pub_date_start: value.pub_date_start,
+            pub_date_end: value.pub_date_end,
+            attached_fuuids: value.attached_fuuids,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct FeedDataResponse {
     ok: bool,
-    items: Vec<DataCollectorRow>,
+    items: Vec<DataCollectorFilesResponse>,
     keys: Option<MessageMilleGrillesOwned>,
 }
 
 async fn request_feed_data<M>(middleware: &M, mut message: MessageValide)
-                              -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
-where M: GenerateurMessages + MongoDao + ValidateurX509
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    where M: GenerateurMessages + MongoDao + ValidateurX509
 {
     if !message.certificat.verifier_roles_string(vec!["datasource_mapper".to_string()])? {
         return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid role"))?));
@@ -565,7 +602,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     };
 
     let filtre = doc!{
-        "save_date": {"$lt": &request.batch_start},
+        "save_date": {"$gt": &request.batch_start},
         "feed_id": &request.feed_id,
     };
     let limit = request.limit.unwrap_or(50);
@@ -575,38 +612,21 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         .hint(Hint::Name("date_feed".into()))
         // .sort(doc! {"save_date": 1})  // Implicit with index hint
         .build();
-    let collection = middleware.get_collection_typed::<DataCollectorRow>(COLLECTION_NAME_SRC_DATAFILES)?;
+    let collection = middleware.get_collection_typed::<DataCollectorFilesRow>(COLLECTION_NAME_SRC_DATAFILES)?;
     let mut cursor = collection.find(filtre, options).await?;
     
-    let mut key_ids = HashSet::with_capacity(5);
+    let mut key_ids = HashSet::with_capacity(20);
     let mut rows = Vec::with_capacity(limit as usize);
     while cursor.advance().await? {
         let row = cursor.deserialize_current()?;
         // Extract key_ids
-        if let Some(cle_id) = row.encrypted_data.cle_id.as_ref() {
-            key_ids.insert(cle_id.to_owned());
-        }
-        if let Some(files) = row.files.as_ref() {
-            for file in files {
-                if let Some(decryption) = file.decryption.as_ref() {
-                    if let Some(cle_id) = decryption.cle_id.as_ref() {
-                        key_ids.insert(cle_id.to_owned());
-                    }
-                }
-            }
-        }
-        rows.push(row);
+        key_ids.extend(row.key_ids.clone());
+        rows.push(row.into());
     }
 
     let mut response = FeedDataResponse {ok: true, items: rows, keys: None};
-    
-    // if ! key_ids.is_empty() {
-    //     debug!("Fetch decryption keys");
-    //     let key_ids = key_ids.into_iter().collect::<Vec<String>>();
-    //     let client_certificate = message.certificat.chaine_pem()?;
-    //     let recrypted_keys = get_encrypted_keys(middleware, &key_ids, Some(client_certificate)).await?;
-    //     response.keys = Some(recrypted_keys);
-    // }
+
+    debug!("Fetching key_ids: {:?}", key_ids);
     response.keys = fetch_decryption_keys(middleware, &message, key_ids).await?;
     
     Ok(Some(middleware.build_reponse(response)?.0))
