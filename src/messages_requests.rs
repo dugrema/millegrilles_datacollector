@@ -756,12 +756,14 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         _ => ()
     };
 
-    // Fetch data items
     let skip = request.skip.unwrap_or(0);
     let collection = middleware.get_collection_typed::<FeedViewDataRow>(COLLECTION_NAME_FEED_VIEW_DATA)?;
+
     // Count items (for pagination)
     let options = CountOptions::builder().limit(1000).hint(Hint::Name("pubdate_desc_group".to_string())).build();
-    let count = collection.count_documents(data_filtre.clone(), None).await?;
+    let count = collection.count_documents(data_filtre.clone(), options).await?;
+
+    // Fetch data items
     let options = FindOptions::builder().limit(limit).skip(skip).hint(Hint::Name("pubdate_desc_group".to_string())).build();
     let mut cursor = collection.find(data_filtre, options).await?;
     let mut items: Vec<FeedViewDataItem> = Vec::with_capacity(limit as usize);
