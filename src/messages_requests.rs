@@ -697,6 +697,10 @@ struct FeedViewDataRequest {
     feed_view_id: String,
     skip: Option<u64>,
     limit: Option<i64>,
+    #[serde(default, with="optionepochseconds")]
+    start_date: Option<DateTime<Utc>>,
+    #[serde(default, with="optionepochseconds")]
+    end_date: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -737,9 +741,23 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         key_ids.insert(cle_id.to_owned());
     }
 
+    let mut data_filtre = doc!{"feed_view_id": &request.feed_view_id};
+
+    // Apply date filtre when appropriate - "$and": [start, end]
+    match (request.start_date, request.end_date) {
+        (Some(start_date), Some(end_date)) => {
+            data_filtre.insert("$and",
+            vec![
+                    doc!{"pub_date": {"$gte": start_date}},
+                    doc!{"pub_date": {"$lt": end_date}}
+                ]
+            );
+        },
+        _ => ()
+    };
+
     // Fetch data items
     let skip = request.skip.unwrap_or(0);
-    let data_filtre = doc!{"feed_view_id": &request.feed_view_id};
     let collection = middleware.get_collection_typed::<FeedViewDataRow>(COLLECTION_NAME_FEED_VIEW_DATA)?;
     // Count items (for pagination)
     let options = CountOptions::builder().limit(1000).hint(Hint::Name("pubdate_desc_group".to_string())).build();
