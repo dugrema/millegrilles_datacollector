@@ -402,42 +402,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     };
 
     // Throws Err if unauthorized
-    verify_authorized_feed(middleware, request.feed_id.as_str(), message.certificat.as_ref()).await?;
-
-    // {
-    //     let user_id = match message.certificat.get_user_id() {
-    //         Ok(inner) => match inner {
-    //             Some(user) => user.to_owned(),
-    //             None => {
-    //                 error!("request_get_data_items_by_range Invalid certificate, no user_id - command rejected");
-    //                 return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
-    //             }
-    //         },
-    //         Err(e) => Err(format!("command_create_feed Error get_user_id() : {:?}", e))?
-    //     };
-    //
-    //     let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
-    //     let filtre = if is_admin {
-    //         doc! {"user_id": null, "feed_id": &request.feed_id, "deleted": false}
-    //     } else {
-    //         // Regular private user, only load user feeds.
-    //         doc!(
-    //             "$or": [
-    //                 {"user_id": user_id},
-    //                 {"user_id": null, "security_level": {"$in": [SECURITE_1_PUBLIC, SECURITE_2_PRIVE]}},
-    //             ],
-    //             "feed_id": &request.feed_id,
-    //             "deleted": false
-    //         )
-    //     };
-    //     let collection_feeds = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
-    //     let _feed = match collection_feeds.find_one(filtre, None).await? {
-    //         Some(feed) => feed,
-    //         None => {
-    //             return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
-    //         }
-    //     };
-    // }
+    verify_authorized_feed(middleware, request.feed_id.as_str(), message.certificat.as_ref(), true).await?;
 
     let (start_date, end_date) = match (request.start_date, request.end_date) {
         (Some(start_date), Some(end_date)) => (start_date, end_date),
@@ -694,7 +659,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     };
 
     // Throws Err if unauthorized
-    let feed = verify_authorized_feed(middleware, request.feed_id.as_str(), message.certificat.as_ref()).await?;
+    let feed = verify_authorized_feed(middleware, request.feed_id.as_str(), message.certificat.as_ref(), true).await?;
 
     let mut key_ids = HashSet::with_capacity(50);
     if let Some(cle_id) = feed.encrypted_feed_information.cle_id.as_ref() {
@@ -761,7 +726,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     };
 
     // Throws Err if unauthorized
-    let feed = verify_authorized_feed(middleware, feed_view.feed_id.as_str(), message.certificat.as_ref()).await?;
+    let feed = verify_authorized_feed(middleware, feed_view.feed_id.as_str(), message.certificat.as_ref(), true).await?;
 
     let limit = request.limit.unwrap_or(50);
     let mut key_ids = HashSet::with_capacity(limit as usize * 2);
@@ -810,7 +775,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     Ok(Some(middleware.build_reponse_chiffree(response_message, message.certificat.as_ref())?.0))
 }
 
-async fn verify_authorized_feed<M>(middleware: &M, feed_id: &str, certificat: &EnveloppeCertificat) -> Result<DataFeedRow, CommonError>
+async fn verify_authorized_feed<M>(middleware: &M, feed_id: &str, certificat: &EnveloppeCertificat, include_shared: bool) -> Result<DataFeedRow, CommonError>
     where M: MongoDao
 {
     let is_admin = certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
@@ -833,13 +798,19 @@ async fn verify_authorized_feed<M>(middleware: &M, feed_id: &str, certificat: &E
 
         if is_admin {
             doc! {"feed_id": feed_id, "user_id": null, "deleted": false}  // Only fetch system feeds
-        } else {
-            // Regular private user, only load user feeds and private system feeds.
-            doc!(
+        } else if include_shared {
+            // Regular private user, only load user feeds and public/private system feeds.
+            doc! {
                 "feed_id": feed_id,
-                "user_id": &user_id,
-                "deleted": false
-            )
+                "deleted": false,
+                "$or": [
+                    {"user_id": &user_id},
+                    {"user_id": None::<&str>, "security_level": {"$in": vec![SECURITE_1_PUBLIC, SECURITE_2_PRIVE]}},
+                ],
+            }
+        } else {
+            // Regular private user, only load user feeds
+            doc!{"feed_id": feed_id, "user_id": &user_id, "deleted": false}
         }
     };
 
