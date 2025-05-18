@@ -1,7 +1,7 @@
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
-use crate::constants::{COLLECTION_NAME_DATA_DATACOLLECTOR, COLLECTION_NAME_FEEDS, COLLECTION_NAME_FEED_VIEWS, COLLECTION_NAME_FEED_VIEW_DATA, COLLECTION_NAME_SRC_DATAFILES, COLLECTION_NAME_SRC_FILES_VOLATILE};
+use crate::constants::{COLLECTION_NAME_DATA_DATACOLLECTOR, COLLECTION_NAME_FEEDS, COLLECTION_NAME_FEED_VIEWS, COLLECTION_NAME_FEED_VIEW_DATED, COLLECTION_NAME_FEED_VIEW_GROUPED_DATED, COLLECTION_NAME_SRC_DATAFILES, COLLECTION_NAME_SRC_FILES_VOLATILE};
 
 pub async fn prepare_mongodb_index<M>(middleware: &M) -> Result<(), CommonError>
 where M: MongoDao + ConfigMessages
@@ -92,6 +92,38 @@ where M: MongoDao + ConfigMessages
         Some(options_feedview_id)
     ).await?;
 
+    // view/dated
+    let options_feedview_dated_id = IndexOptions {
+        nom_index: Some(String::from("data_id_uniq")),
+        unique: true,
+    };
+    let champs_feedview_dated_id = vec!(
+        ChampIndex {nom_champ: String::from("data_id"), direction: 1},
+        ChampIndex {nom_champ: String::from("feed_view_id"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        COLLECTION_NAME_FEED_VIEW_DATED,
+        champs_feedview_dated_id,
+        Some(options_feedview_dated_id)
+    ).await?;
+
+    let options_feedview_pubdatedesc_id = IndexOptions {
+        nom_index: Some(String::from("pubdate_desc")),
+        unique: false,
+    };
+    let champs_feedview_pubdatedesc_id = vec!(
+        ChampIndex {nom_champ: String::from("pub_date"), direction: -1},
+        ChampIndex {nom_champ: String::from("feed_view_id"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        COLLECTION_NAME_FEED_VIEW_DATED,
+        champs_feedview_pubdatedesc_id,
+        Some(options_feedview_pubdatedesc_id)
+    ).await?;
+
+    // view/GroupedDated
     let options_feedview_data_id = IndexOptions {
         nom_index: Some(String::from("data_id_uniq")),
         unique: true,
@@ -102,23 +134,23 @@ where M: MongoDao + ConfigMessages
     );
     middleware.create_index(
         middleware,
-        COLLECTION_NAME_FEED_VIEW_DATA,
+        COLLECTION_NAME_FEED_VIEW_GROUPED_DATED,
         champs_feedview_data_id,
         Some(options_feedview_data_id)
     ).await?;
 
     let options_feedview_pubdatedescgroup_id = IndexOptions {
-        nom_index: Some(String::from("pubdate_desc_group")),
+        nom_index: Some(String::from("pubdate_desc")),
         unique: false,
     };
     let champs_feedview_pubdatedescgroup_id = vec!(
         ChampIndex {nom_champ: String::from("pub_date"), direction: -1},
-        ChampIndex {nom_champ: String::from("group_id"), direction: 1},
         ChampIndex {nom_champ: String::from("feed_view_id"), direction: 1},
+        ChampIndex {nom_champ: String::from("group_id"), direction: 1},
     );
     middleware.create_index(
         middleware,
-        COLLECTION_NAME_FEED_VIEW_DATA,
+        COLLECTION_NAME_FEED_VIEW_GROUPED_DATED,
         champs_feedview_pubdatedescgroup_id,
         Some(options_feedview_pubdatedescgroup_id)
     ).await?;

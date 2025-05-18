@@ -208,7 +208,7 @@ pub struct UpdateFeedViewTransaction {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct FeedViewDataItem {
+pub struct FeedViewGroupedDatedItem {
     /// Unique data item identifier for this feed view
     pub data_id: String,
     pub feed_view_id: String,

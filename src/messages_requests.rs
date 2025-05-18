@@ -19,11 +19,11 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds, epochmilliseconds, optionepochmilliseconds};
 use millegrilles_common_rust::millegrilles_cryptographie::x509::EnveloppeCertificat;
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewDataRow, FeedViewRow};
+use crate::data_mongodb::{DataCollectorFilesRow, DataCollectorRow, DataCollectorRowIds, DataFeedRow, FeedViewGroupedDatedRow, FeedViewRow};
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::keymaster::{fetch_decryption_keys, get_decrypted_keys, get_encrypted_keys};
 use crate::messages_commands::FuuidVolatile;
-use crate::transactions_struct::{CreateFeedTransaction, FeedViewDataItem, FileItem};
+use crate::transactions_struct::{CreateFeedTransaction, FeedViewGroupedDatedItem, FileItem};
 
 pub async fn consume_request<M>(middleware: &M, message: MessageValide, _manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
@@ -704,18 +704,18 @@ struct FeedViewDataRequest {
 }
 
 #[derive(Serialize)]
-struct FeedViewDataResponse {
+struct FeedViewDatedGroupedDataResponse {
     ok: bool,
     feed: FeedResponse,
     feed_view: FeedViewResponse,
     estimated_count: u64,
-    items: Vec<FeedViewDataItem>,
+    items: Vec<FeedViewGroupedDatedItem>,
     keys: Option<MessageMilleGrillesOwned>,
 }
 
 async fn request_view_data<M>(middleware: &M, mut message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
-where M: GenerateurMessages + MongoDao + ValidateurX509
+    where M: GenerateurMessages + MongoDao + ValidateurX509
 {
     let request: FeedViewDataRequest = {
         let message_ref = message.message.parse()?;
@@ -727,6 +727,16 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     let feed_view = match collection_views.find_one(filtre_view, None).await? {
         Some(view) => view,
         None => return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed view"))?))
+    };
+
+    let data_type = match feed_view.data_type.as_ref() {
+        Some(data_type) => ViewDataType::try_from(data_type.as_str())?,
+        None => ViewDataType::GroupedDated,  // Default to grouped-dated
+    };
+
+    let (data_collection_name, hint) = match data_type {
+        ViewDataType::Dated => (COLLECTION_NAME_FEED_VIEW_DATED, Hint::Name("pubdate_desc".to_string())),
+        ViewDataType::GroupedDated => (COLLECTION_NAME_FEED_VIEW_GROUPED_DATED, Hint::Name("pubdate_desc".to_string()))
     };
 
     // Throws Err if unauthorized
@@ -757,16 +767,16 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
     };
 
     let skip = request.skip.unwrap_or(0);
-    let collection = middleware.get_collection_typed::<FeedViewDataRow>(COLLECTION_NAME_FEED_VIEW_DATA)?;
+    let collection = middleware.get_collection_typed::<FeedViewGroupedDatedRow>(data_collection_name)?;
 
     // Count items (for pagination)
-    let options = CountOptions::builder().limit(1000).hint(Hint::Name("pubdate_desc_group".to_string())).build();
+    let options = CountOptions::builder().limit(1000).hint(hint.clone()).build();
     let count = collection.count_documents(data_filtre.clone(), options).await?;
 
     // Fetch data items
-    let options = FindOptions::builder().limit(limit).skip(skip).hint(Hint::Name("pubdate_desc_group".to_string())).build();
+    let options = FindOptions::builder().limit(limit).skip(skip).hint(hint).build();
     let mut cursor = collection.find(data_filtre, options).await?;
-    let mut items: Vec<FeedViewDataItem> = Vec::with_capacity(limit as usize);
+    let mut items: Vec<FeedViewGroupedDatedItem> = Vec::with_capacity(limit as usize);
 
     // Extract all key_ids
     while cursor.advance().await? {
@@ -785,7 +795,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         }
         items.push(row.into());
     }
-    let mut response_message = FeedViewDataResponse {
+    let mut response_message = FeedViewDatedGroupedDataResponse {
         ok: true, feed: feed.into(), feed_view: feed_view.into(), estimated_count: count, items, keys: None};
 
     if key_ids.len() > 0 {

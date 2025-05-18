@@ -4,7 +4,7 @@ use millegrilles_common_rust::bson;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
-use crate::transactions_struct::{FeedViewDataItem, FileItem};
+use crate::transactions_struct::{FeedViewGroupedDatedItem, FileItem};
 
 #[derive(Serialize, Deserialize)]
 pub struct DataFeedRow {
@@ -87,6 +87,7 @@ pub struct FeedViewRow {
     pub name: Option<String>,
     pub active: bool,
     pub decrypted: bool,
+    pub data_type: Option<String>,
     pub mapping_code: String,
     #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
     pub creation_date: DateTime<Utc>,
@@ -97,7 +98,7 @@ pub struct FeedViewRow {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct FeedViewDataRow {
+pub struct FeedViewGroupedDatedRow {
     /// Unique data item identifier for this feed view
     pub data_id: String,
     pub feed_view_id: String,
@@ -113,8 +114,8 @@ pub struct FeedViewDataRow {
     pub files: Option<Vec<FileItem>>,
 }
 
-impl From<FeedViewDataItem> for FeedViewDataRow {
-    fn from(value: FeedViewDataItem) -> Self {
+impl From<FeedViewGroupedDatedItem> for FeedViewGroupedDatedRow {
+    fn from(value: FeedViewGroupedDatedItem) -> Self {
         Self {
             data_id: value.data_id,
             feed_view_id: value.feed_view_id,
@@ -127,9 +128,9 @@ impl From<FeedViewDataItem> for FeedViewDataRow {
     }
 }
 
-impl Into<FeedViewDataItem> for FeedViewDataRow {
-    fn into(self) -> FeedViewDataItem {
-        FeedViewDataItem {
+impl Into<FeedViewGroupedDatedItem> for FeedViewGroupedDatedRow {
+    fn into(self) -> FeedViewGroupedDatedItem {
+        FeedViewGroupedDatedItem {
             data_id: self.data_id,
             feed_view_id: self.feed_view_id,
             feed_id: self.feed_id,

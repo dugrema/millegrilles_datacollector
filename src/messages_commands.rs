@@ -19,10 +19,10 @@ use millegrilles_common_rust::{chrono, serde_json};
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use crate::domain_manager::DataCollectorDomainManager;
 use crate::constants::*;
-use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow, FeedViewDataRow, FeedViewRow};
+use crate::data_mongodb::{DataCollectorRowIds, DataFeedRow, FeedViewGroupedDatedRow, FeedViewRow};
 use crate::file_maintenance::{claim_and_visit_files, claim_files};
 use crate::keymaster::{fetch_decryption_keys, transmit_attached_key};
-use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, FeedViewDataItem, FileItem, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction, UpdateFeedViewTransaction};
+use crate::transactions_struct::{CreateFeedTransaction, CreateFeedViewTransaction, DeleteFeedTransaction, FeedViewGroupedDatedItem, FileItem, SaveDataItemTransaction, SaveDataItemTransactionV2, UpdateFeedTransaction, UpdateFeedViewTransaction};
 
 pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager: &DataCollectorDomainManager)
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
@@ -649,16 +649,16 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 }
 
 #[derive(Deserialize)]
-struct InsertFeedViewDataRequest {
+struct InsertFeedViewGroupedDatedRequest {
     feed_view_id: String,
     feed_id: String,
-    data: Vec<FeedViewDataItem>,
+    data: Vec<FeedViewGroupedDatedItem>,
     truncate: Option<bool>,
     deduplicate: Option<bool>,
 }
 
 async fn command_insert_feed_view_data<M>(middleware: &M, mut message: MessageValide, session: &mut ClientSession)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao + ValidateurX509
 {
     // Access check
@@ -669,7 +669,7 @@ async fn command_insert_feed_view_data<M>(middleware: &M, mut message: MessageVa
         return Ok(Some(middleware.reponse_err(Some(401), None, Some("Access denied - invalid security level"))?));
     }
 
-    let command: InsertFeedViewDataRequest = {
+    let command: InsertFeedViewGroupedDatedRequest = {
         let message_ref = message.message.parse()?;
         message_ref.contenu()?.deserialize()?
     };
@@ -678,26 +678,39 @@ async fn command_insert_feed_view_data<M>(middleware: &M, mut message: MessageVa
     let filtre_feed = doc!{"feed_id": &command.feed_id, "deleted": false};
     let collection_feeds = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
     if collection_feeds.find_one(filtre_feed, None).await?.is_none() {
-        error!("command_insert_feed_view_data Unknown feed_id");
+        error!("command_insert_feed_view_grouped_dated Unknown feed_id");
         return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed_id"))?));
     };
 
     // Check feed view (must not be deleted)
     let filtre_feed_view = doc!{"feed_view_id": &command.feed_view_id, "deleted": false};
     let collection_feed_views = middleware.get_collection_typed::<FeedViewRow>(COLLECTION_NAME_FEED_VIEWS)?;
-    if collection_feed_views.find_one(filtre_feed_view, None).await?.is_none() {
-        error!("command_insert_feed_view_data Unknown feed_view_id");
-        return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed_view_id"))?));
+    let feed_view = match collection_feed_views.find_one(filtre_feed_view, None).await? {
+        Some(inner) => inner,
+        None => {
+            error!("command_insert_feed_view_grouped_dated Unknown feed_view_id");
+            return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed_view_id"))?));
+        }
     };
 
-    let collection_feed_view_data = middleware.get_collection_typed::<FeedViewDataRow>(COLLECTION_NAME_FEED_VIEW_DATA)?;
+    let data_type = match feed_view.data_type.as_ref() {
+        Some(data_type) => ViewDataType::try_from(data_type.as_str())?,
+        None => ViewDataType::GroupedDated,  // Default to grouped-dated
+    };
+    let data_collection_name = match data_type {
+        ViewDataType::Dated => COLLECTION_NAME_FEED_VIEW_DATED,
+        ViewDataType::GroupedDated => COLLECTION_NAME_FEED_VIEW_GROUPED_DATED,
+    };
+    
+    let collection_feed_view_data =
+        middleware.get_collection_typed::<FeedViewGroupedDatedRow>(data_collection_name)?;
     if Some(true) == command.truncate {
         let delete_filtre = doc!{"feed_id": &command.feed_id, "feed_view_id": &command.feed_view_id};
         collection_feed_view_data.delete_many(delete_filtre, None).await?;
     }
 
     // Convert all items into FeedViewDataRow type
-    let mut batch: Vec<FeedViewDataRow> = Vec::with_capacity(command.data.len());
+    let mut batch: Vec<FeedViewGroupedDatedRow> = Vec::with_capacity(command.data.len());
     for item in command.data {
         batch.push(item.into());
     }

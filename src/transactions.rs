@@ -218,6 +218,7 @@ where M: GenerateurMessages + MongoDao
         name: transaction_create_feed_view.name,
         active: transaction_create_feed_view.active,
         decrypted: transaction_create_feed_view.decrypted,
+        data_type: None,
         mapping_code: transaction_create_feed_view.mapping_code,
         creation_date: estampille,
         modification_date: now,
