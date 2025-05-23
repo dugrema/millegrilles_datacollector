@@ -1,4 +1,4 @@
-FROM ubuntu
+FROM ubuntu as stage1
 
 ENV APP_FOLDER=/usr/src/app \
     RUST_LOG=warn \
@@ -13,10 +13,12 @@ ENV APP_FOLDER=/usr/src/app \
 
 WORKDIR $APP_FOLDER
 
-COPY target/release/millegrilles_datacollector .
-
 RUN mkdir -p /var/opt/millegrilles/archives && chown 983:980 /var/opt/millegrilles/archives && \
     apt-get update && apt-get install -y ca-certificates && apt-get clean
+
+FROM stage1
+
+COPY target/release/millegrilles_datacollector .
 
 # UID 983 mgissuer et code
 # GID 980 millegrilles
