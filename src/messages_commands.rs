@@ -64,6 +64,7 @@ pub async fn consume_command<M>(middleware: &M, message: MessageValide, manager:
         TRANSACTION_CREATE_FEED => command_create_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_UPDATE_FEED => command_update_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_DELETE_FEED => command_delete_feed(middleware, message, manager, &mut session).await,
+        TRANSACTION_RESTORE_FEED => command_restore_feed(middleware, message, manager, &mut session).await,
         TRANSACTION_SAVE_DATA_ITEM => command_save_data_item(middleware, message, manager, &mut session).await,
         TRANSACTION_SAVE_DATA_ITEM_V2 => command_save_data_item_v2(middleware, message, manager, &mut session).await,
         TRANSACTION_CREATE_FEED_VIEW => command_create_feed_view(middleware, message, manager, &mut session).await,
@@ -194,7 +195,7 @@ async fn command_delete_feed<M>(middleware: &M, mut message: MessageValide, mana
                                 -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: GenerateurMessages + MongoDao + ValidateurX509
 {
-    let mut message_owned = message.message.parse_to_owned()?;
+    let message_owned = message.message.parse_to_owned()?;
 
     let user_id = match message.certificat.get_user_id() {
         Ok(inner) => match inner {
@@ -739,6 +740,53 @@ async fn command_insert_feed_view_data<M>(middleware: &M, mut message: MessageVa
             }
         }
     }
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+async fn command_restore_feed<M>(middleware: &M, mut message: MessageValide, manager: &DataCollectorDomainManager, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    let message_owned = message.message.parse_to_owned()?;
+
+    let user_id = match message.certificat.get_user_id() {
+        Ok(inner) => match inner {
+            Some(user) => user.to_owned(),
+            None => {
+                error!("command_restore_feed Invalid certificate, no user_id - command rejected");
+                return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid certificate"))?));
+            }
+        },
+        Err(e) => Err(format!("command_restore_feed Erreur get_user_id() : {:?}", e))?
+    };
+    let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+
+    // Deserialize to validate the format
+    let command: DeleteFeedTransaction = message_owned.deserialize()?;
+
+    // Check if the user is allowed to delete the feed
+    let filtre = doc!{"feed_id": &command.feed_id};
+    let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    let feed = match collection.find_one(filtre, None).await? {
+        Some(feed) => feed,
+        None => {
+            error!("command_restore_feed Unknown feed_id {} - command rejected", command.feed_id);
+            return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown feed"))?));
+        }
+    };
+
+    if feed.user_id == Some(user_id) {
+        // Ok, feed belongs to user
+    } else if is_admin && feed.user_id.is_none() {
+        // Ok, system feed managed by admin
+    }  else {
+        error!("command_restore_feed Restoring feed_id {} - user not authorized", command.feed_id);
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Unauthorized"))?));
+    }
+
+    // Save and run new transaction
+    sauvegarder_traiter_transaction_v2(middleware, message, manager, session).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }

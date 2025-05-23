@@ -30,6 +30,7 @@ pub const COMMAND_INSERT_VIEW_DATA: &str = "insertViewData";
 pub const TRANSACTION_CREATE_FEED: &str = "createFeed";
 pub const TRANSACTION_UPDATE_FEED: &str = "updateFeed";
 pub const TRANSACTION_DELETE_FEED: &str = "deleteFeed";
+pub const TRANSACTION_RESTORE_FEED: &str = "restoreFeed";
 pub const TRANSACTION_SAVE_DATA_ITEM: &str = "saveDataItem";
 pub const TRANSACTION_SAVE_DATA_ITEM_V2: &str = "saveDataItemV2";
 pub const TRANSACTION_CREATE_FEED_VIEW: &str = "createFeedView";

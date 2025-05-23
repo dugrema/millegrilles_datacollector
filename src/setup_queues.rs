@@ -51,6 +51,7 @@ pub fn setup_queues(manager: &DataCollectorDomainManager) -> Vec<QueueType> {
         TRANSACTION_CREATE_FEED,
         TRANSACTION_UPDATE_FEED,
         TRANSACTION_DELETE_FEED,
+        TRANSACTION_RESTORE_FEED,
         TRANSACTION_CREATE_FEED_VIEW,
         TRANSACTION_UPDATE_FEED_VIEW,
         COMMAND_PROCESS_VIEW,

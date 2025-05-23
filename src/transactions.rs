@@ -38,6 +38,7 @@ where
         TRANSACTION_CREATE_FEED => transaction_create_feed(middleware, transaction, session).await,
         TRANSACTION_UPDATE_FEED => transaction_update_feed(middleware, transaction, session).await,
         TRANSACTION_DELETE_FEED => transaction_delete_feed(middleware, transaction, session).await,
+        TRANSACTION_RESTORE_FEED => transaction_restore_feed(middleware, transaction, session).await,
         TRANSACTION_SAVE_DATA_ITEM => transaction_save_data_item(middleware, transaction, session).await,
         TRANSACTION_SAVE_DATA_ITEM_V2 => transaction_save_data_item_v2(middleware, transaction, session).await,
         TRANSACTION_CREATE_FEED_VIEW => transaction_create_feed_view(middleware, transaction, session).await,
@@ -258,6 +259,37 @@ where M: GenerateurMessages + MongoDao
     if result.matched_count != 1 {
         Err("transaction_update_feed_view Update had no effect (no match)")?;
     }
+
+    Ok(())
+}
+
+async fn transaction_restore_feed<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession) -> Result<(), CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    let transaction_delete_feed: DeleteFeedTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+
+    let user_id = match transaction.certificat.get_user_id() {
+        Ok(inner) => match inner {
+            Some(user) => user.to_owned(),
+            None => Err("transaction_restore_feed User_id missing from certificate")?
+        },
+        Err(e) => Err(format!("transaction_restore_feed Error getting user_id: {:?}", e))?
+    };
+    let is_admin = transaction.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
+
+    // When admin, operate on system feeds (user_id is null)
+    let filtre = match is_admin {
+        true => doc!{"feed_id": &transaction_delete_feed.feed_id, "user_id": null},
+        false => doc!{"feed_id": &transaction_delete_feed.feed_id, "user_id": &user_id},
+    };
+
+    let ops = doc! {
+        "$set": {"deleted": false},
+        "$unset": {"deleted_at": true},
+    };
+
+    let collection = middleware.get_collection_typed::<DataFeedRow>(COLLECTION_NAME_FEEDS)?;
+    collection.update_one_with_session(filtre, ops, None, session).await?;
 
     Ok(())
 }

@@ -107,6 +107,7 @@ impl From<DataFeedRow> for FeedResponse {
 #[derive(Deserialize)]
 struct RequestGetFeeds {
     feed_ids: Option<Vec<String>>,
+    deleted: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -133,9 +134,16 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide)
 
     let is_admin = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
 
+    let request: RequestGetFeeds = {
+        let message_ref = message.message.parse()?;
+        message_ref.contenu()?.deserialize()?
+    };
+
+    let deleted_flag = request.deleted.unwrap_or(false);
+    
     let filtre = {
         let mut filtre = if is_admin {
-            doc! {"user_id": null, "deleted": false}  // Only fetch system feeds
+            doc! {"user_id": null, "deleted": deleted_flag}  // Only fetch system feeds
         } else {
             // Regular private user, only load user feeds and private system feeds.
             doc!(
@@ -144,13 +152,8 @@ async fn request_get_feeds<M>(middleware: &M, mut message: MessageValide)
                     {"user_id": null, "security_level": {"$in": [SECURITE_1_PUBLIC, SECURITE_2_PRIVE]}},
                 ],
                 "user_id": {"$in": [&user_id, null]},
-                "deleted": false
+                "deleted": deleted_flag
             )
-        };
-
-        let request: RequestGetFeeds = {
-            let message_ref = message.message.parse()?;
-            message_ref.contenu()?.deserialize()?
         };
 
         if let Some(feed_ids) = request.feed_ids {
