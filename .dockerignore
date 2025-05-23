@@ -2,4 +2,8 @@
 .idea
 src
 target/debug
-
+target/release/build
+target/release/deps
+target/release/examples
+target/release/incremental
+target/release/millegrilles_datacollector.d
