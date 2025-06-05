@@ -447,17 +447,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-recursion"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.100",
-]
-
-[[package]]
 name = "async-std"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2627,11 +2616,10 @@ checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
 name = "millegrilles_common_rust"
-version = "2025.3.2"
-source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=master#865cb213c493e042e07558dc00142209ffd5fc08"
+version = "2025.3.3"
+source = "git+https://github.com/dugrema/millegrilles_common_rust.git?tag=2025.3-release#d37a72bdcbe48b7a9e45b61d3317e2eda9da5344"
 dependencies = [
  "async-compression",
- "async-recursion",
  "async-std",
  "async-tar",
  "async-trait",
@@ -2708,7 +2696,7 @@ dependencies = [
 
 [[package]]
 name = "millegrilles_datacollector"
-version = "2025.3.20"
+version = "2025.3.21"
 dependencies = [
  "env_logger 0.9.3",
  "log",
